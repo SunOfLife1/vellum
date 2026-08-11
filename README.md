@@ -4,6 +4,8 @@
 
 https://github.com/user-attachments/assets/f8171063-16a8-497f-ba20-9e11bc50727e
 
+Vellum began as a fork of [Chameleos](https://github.com/Treeniks/chameleos) by Thomas Lindae.
+
 ## Usage
 
 Start the overlay once, then toggle drawing from a compositor shortcut:
@@ -40,20 +42,6 @@ and `Alt` draws rectangles and ellipses from their center.
 
 Run `vellum --help` for startup options and socket commands.
 
-## Building from source
-
-Arch:
-
-```sh
-sudo pacman -S --needed base-devel git rust wayland libxkbcommon libglvnd vulkan-icd-loader
-
-git clone https://github.com/greyxp1/vellum
-cd vellum
-cargo build --release --locked
-```
-
-Nix: `nix build` (or `nix develop` for a development shell).
-
 ## Home Manager
 
 ```nix
@@ -63,4 +51,27 @@ Nix: `nix build` (or `nix develop` for a development shell).
 }
 ```
 
-Vellum began as a fork of [Chameleos](https://github.com/Treeniks/chameleos) by Thomas Lindae.
+## Building from source
+
+### Arch
+
+```sh
+sudo pacman -S --needed base-devel git rust wayland libxkbcommon libglvnd vulkan-icd-loader
+```
+
+### Fedora
+
+```sh
+sudo dnf install cargo gcc git pkgconf-pkg-config wayland-devel libxkbcommon-devel libglvnd-egl vulkan-loader
+```
+
+Then build:
+
+```sh
+git clone https://github.com/greyxp1/vellum
+cd vellum
+cargo build --release --locked
+```
+
+With Nix, skip the system dependencies and run `nix build`, or use `nix develop` for a
+development shell.
