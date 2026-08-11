@@ -1,0 +1,355 @@
+use std::os::linux::net::SocketAddrExt;
+use std::os::unix::net::SocketAddr;
+use std::os::unix::net::UnixDatagram;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use wayland_client::backend::WaylandError;
+
+mod protocol;
+mod render;
+mod state;
+
+use protocol::{CONTROL_SOCKET, Color, Command, parse_color, valid_width};
+
+const MAX_SOCKET_MESSAGE: usize = 4096;
+
+#[derive(Default)]
+struct Cli {
+    config: Option<std::path::PathBuf>,
+    no_config: bool,
+    stroke_width: Option<f32>,
+    stroke_color: Option<String>,
+    default_tool: Option<String>,
+    force_backend: Option<render::Backend>,
+}
+
+const HELP: &str = r#"Usage: vellum [OPTIONS]
+       vellum COMMAND [VALUE]
+
+Commands:
+  toggle, undo, redo, clear, clear-and-deactivate
+  stroke-width PX, stroke-color #RRGGBB[AA], exit
+
+Options:
+  --config PATH          Read this TOML preferences file
+  --no-config            Ignore preferences files
+  -w, --stroke-width PX  Set the initial stroke width
+  -c, --stroke-color HEX Set the initial #RRGGBB[AA] color
+  --default-tool TOOL    Set the initial tool
+  -b, --force-backend B  Use vulkan or opengl
+  -h, --help             Print help
+  -V, --version          Print version"#;
+
+impl Cli {
+    fn parse(arguments: impl Iterator<Item = String>) -> Result<Self, String> {
+        let mut cli = Self::default();
+        let mut args = arguments.peekable();
+        while let Some(argument) = args.next() {
+            let value = |args: &mut std::iter::Peekable<_>| {
+                args.next()
+                    .ok_or_else(|| format!("{argument} requires a value"))
+            };
+            match argument.as_str() {
+                "--config" => cli.config = Some(value(&mut args)?.into()),
+                "--no-config" => cli.no_config = true,
+                "-w" | "--stroke-width" => {
+                    cli.stroke_width =
+                        Some(value(&mut args)?.parse().map_err(|_| {
+                            "stroke width must be a positive finite number".to_string()
+                        })?)
+                }
+                "-c" | "--stroke-color" => cli.stroke_color = Some(value(&mut args)?),
+                "--default-tool" => cli.default_tool = Some(value(&mut args)?),
+                "-b" | "--force-backend" => {
+                    cli.force_backend = Some(value(&mut args)?.parse().map_err(str::to_string)?)
+                }
+                "-h" | "--help" => {
+                    println!("{HELP}");
+                    std::process::exit(0);
+                }
+                "-V" | "--version" => {
+                    println!("vellum {}", env!("CARGO_PKG_VERSION"));
+                    std::process::exit(0);
+                }
+                _ => return Err(format!("unknown option {argument:?}\n{HELP}")),
+            }
+        }
+        if cli.no_config && cli.config.is_some() {
+            return Err("--config conflicts with --no-config".into());
+        }
+        Ok(cli)
+    }
+}
+
+const DEFAULT_PALETTE: [&str; 8] = [
+    "#FF0000", "#FFFF00", "#00FF00", "#00FFFF", "#0000FF", "#FF00FF", "#FFFFFF", "#000000",
+];
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileConfig {
+    default_tool: Option<String>,
+    remember_last_tool: Option<bool>,
+    stroke_width: Option<f32>,
+    default_color: Option<String>,
+    palette: Option<Vec<String>>,
+    feedback_duration_ms: Option<u64>,
+}
+
+struct Settings {
+    stroke_width: f32,
+    stroke_color: Color,
+    force_backend: Option<render::Backend>,
+    default_tool: state::Tool,
+    remember_last_tool: bool,
+    palette: Vec<Color>,
+    feedback_duration: Duration,
+}
+
+impl Settings {
+    fn load(cli: Cli) -> Result<Self, String> {
+        let file = if cli.no_config {
+            FileConfig::default()
+        } else if let Some(path) = &cli.config {
+            read_config(path)?
+        } else {
+            default_config_path().map_or_else(
+                || Ok(FileConfig::default()),
+                |path| {
+                    if path.exists() {
+                        read_config(&path)
+                    } else {
+                        Ok(FileConfig::default())
+                    }
+                },
+            )?
+        };
+
+        let stroke_width = cli.stroke_width.or(file.stroke_width).unwrap_or(5.0);
+        if !valid_width(stroke_width) {
+            return Err("stroke_width must be a positive finite number".into());
+        }
+
+        let default_tool = cli
+            .default_tool
+            .or(file.default_tool)
+            .unwrap_or_else(|| "pen".into())
+            .to_ascii_lowercase()
+            .parse()?;
+
+        let color_text = cli
+            .stroke_color
+            .or(file.default_color)
+            .unwrap_or_else(|| "#FF0000".into());
+        let stroke_color = parse_named_color("default_color", &color_text)?;
+
+        let palette_text = file
+            .palette
+            .unwrap_or_else(|| DEFAULT_PALETTE.iter().map(ToString::to_string).collect());
+        if !(2..=12).contains(&palette_text.len()) {
+            return Err("palette must contain between 2 and 12 colors".into());
+        }
+        let palette = palette_text
+            .iter()
+            .enumerate()
+            .map(|(index, color)| parse_named_color(&format!("palette[{index}]"), color))
+            .collect::<Result<_, _>>()?;
+
+        let feedback_duration_ms = file.feedback_duration_ms.unwrap_or(500);
+        if feedback_duration_ms > 60_000 {
+            return Err("feedback_duration_ms must not exceed 60000".into());
+        }
+
+        Ok(Self {
+            stroke_width,
+            stroke_color,
+            force_backend: cli.force_backend,
+            default_tool,
+            remember_last_tool: file.remember_last_tool.unwrap_or(true),
+            palette,
+            feedback_duration: Duration::from_millis(feedback_duration_ms),
+        })
+    }
+}
+
+fn parse_named_color(name: &str, value: &str) -> Result<Color, String> {
+    parse_color(value).map_err(|error| format!("invalid {name} {value:?}: {error}"))
+}
+
+fn read_config(path: &Path) -> Result<FileConfig, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    toml::from_str(&contents).map_err(|error| format!("invalid {}: {error}", path.display()))
+}
+
+fn default_config_path() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|directory| directory.join("vellum/config.toml"))
+}
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("vellum: {error}");
+        std::process::exit(2);
+    }
+}
+
+fn run() -> Result<(), String> {
+    let mut arguments = std::env::args().skip(1).peekable();
+    if arguments
+        .peek()
+        .is_some_and(|argument| !argument.starts_with('-'))
+    {
+        return send_command(arguments);
+    }
+    let settings = Settings::load(Cli::parse(arguments)?)?;
+    run_overlay(settings);
+    Ok(())
+}
+
+fn send_command(arguments: impl Iterator<Item = String>) -> Result<(), String> {
+    let message = arguments
+        .map(|argument| argument.replace('-', "_"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if matches!(message.as_str(), "help") {
+        println!("{HELP}");
+        return Ok(());
+    }
+    let command = Command::deserialize(message.as_bytes()).map_err(str::to_owned)?;
+    let socket_addr =
+        SocketAddr::from_abstract_name(CONTROL_SOCKET).map_err(|error| error.to_string())?;
+    let socket = UnixDatagram::unbound().map_err(|error| error.to_string())?;
+    socket
+        .connect_addr(&socket_addr)
+        .map_err(|error| format!("could not connect to the overlay: {error}"))?;
+    socket
+        .send(command.serialize().as_bytes())
+        .map_err(|error| format!("could not send command: {error}"))?;
+    Ok(())
+}
+
+fn run_overlay(settings: Settings) {
+    // setup socket for messages
+    let socket_addr = SocketAddr::from_abstract_name(CONTROL_SOCKET).unwrap();
+    let socket = match UnixDatagram::bind_addr(&socket_addr) {
+        Ok(socket) => socket,
+        Err(error) => {
+            eprintln!("vellum: could not bind control socket: {error}");
+            std::process::exit(1);
+        }
+    };
+    socket.set_nonblocking(true).unwrap_or_else(|error| {
+        eprintln!("vellum: could not configure control socket: {error}");
+        std::process::exit(1);
+    });
+
+    let (mut state, mut event_queue) =
+        state::State::setup_wayland(settings).unwrap_or_else(|error| {
+            eprintln!("vellum: {error}");
+            std::process::exit(1);
+        });
+    state.deactivate();
+
+    'running: loop {
+        if let Err(error) = event_queue.dispatch_pending(&mut state) {
+            eprintln!("vellum: Wayland dispatch failed: {error}");
+            break;
+        }
+        let flush_blocked = match event_queue.flush() {
+            Ok(()) => false,
+            Err(WaylandError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => true,
+            Err(error) => {
+                eprintln!("vellum: Wayland flush failed: {error}");
+                break;
+            }
+        };
+
+        let Some(read_guard) = event_queue.prepare_read() else {
+            continue;
+        };
+        let timeout = state.next_wakeup().map(|deadline| {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            Timespec {
+                tv_sec: remaining.as_secs() as _,
+                tv_nsec: remaining.subsec_nanos() as _,
+            }
+        });
+        let (wayland_ready, socket_ready) = {
+            let mut fds = [
+                PollFd::new(
+                    &event_queue,
+                    PollFlags::IN
+                        | if flush_blocked {
+                            PollFlags::OUT
+                        } else {
+                            PollFlags::empty()
+                        },
+                ),
+                PollFd::new(&socket, PollFlags::IN),
+            ];
+            if let Err(error) = poll(&mut fds, timeout.as_ref()) {
+                if error == rustix::io::Errno::INTR {
+                    continue;
+                }
+                eprintln!("vellum: event polling failed: {error}");
+                break 'running;
+            }
+            (
+                fds[0].revents().contains(PollFlags::IN),
+                fds[1].revents().contains(PollFlags::IN),
+            )
+        };
+        if wayland_ready {
+            if let Err(error) = read_guard.read() {
+                eprintln!("vellum: Wayland read failed: {error}");
+                break;
+            }
+        } else {
+            drop(read_guard);
+        }
+
+        if socket_ready {
+            let mut message = [0; MAX_SOCKET_MESSAGE + 1];
+            loop {
+                let size = match socket.recv(&mut message) {
+                    Ok(size) => size,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) => {
+                        eprintln!("vellum: socket read failed: {error}");
+                        break 'running;
+                    }
+                };
+                if size > MAX_SOCKET_MESSAGE {
+                    eprintln!("vellum: socket message exceeded {MAX_SOCKET_MESSAGE} bytes");
+                    continue;
+                }
+                let command = match Command::deserialize(&message[..size]) {
+                    Ok(command) => command,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        continue;
+                    }
+                };
+                match command {
+                    Command::Toggle => state.toggle_input(),
+                    Command::Undo => state.undo(),
+                    Command::Redo => state.redo(),
+                    Command::Clear => state.clear(),
+                    Command::ClearAndDeactivate => {
+                        state.clear();
+                        state.deactivate();
+                    }
+                    Command::StrokeWidth { width } => state.set_stroke_width(width),
+                    Command::StrokeColor { color } => state.set_stroke_color(color),
+                    Command::Exit => break 'running,
+                }
+            }
+        }
+        state.handle_timeouts(Instant::now());
+    }
+}
