@@ -7,12 +7,16 @@
   wayland-protocols,
   libxkbcommon,
   libGL,
-  vulkan-loader
-}: rustPlatform.buildRustPackage {
+  vulkan-loader,
+}:
+rustPlatform.buildRustPackage rec {
   pname = "vellum";
-  version = (fromTOML (builtins.readFile ./Cargo.toml)).package.version;
-  src = "./";
-  cargoLock.lockFile = ./Cargo.lock;
+  version = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).package.version;
+
+  src = ../.;
+
+  cargoLock.lockFile = "${src}/Cargo.lock";
+
   nativeBuildInputs = [
     pkg-config
     makeWrapper
@@ -28,6 +32,6 @@
 
   postInstall = ''
     wrapProgram $out/bin/vellum \
-      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath ([libGL vulkan-loader])}
+      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [libGL vulkan-loader]}
   '';
 }

@@ -5,7 +5,7 @@
     nixpkgs,
   }: let
     pkgs = nixpkgs.legacyPackages.x86_64-linux;
-    vellum = pkgs.callPackage ./package.nix {};
+    vellum = pkgs.callPackage ./nix/package.nix {};
   in {
     packages.x86_64-linux = {
       inherit vellum;
