@@ -41,6 +41,20 @@ and `Alt` draws rectangles and ellipses from their center.
 
 Run `vellum --help` for startup options and socket commands.
 
+## Building from source
+
+Arch:
+
+```sh
+sudo pacman -S --needed base-devel git rust wayland libxkbcommon libglvnd vulkan-icd-loader
+
+git clone https://github.com/greyxp1/vellum
+cd vellum
+cargo build --release --locked
+```
+
+Nix: `nix build` (or `nix develop` for a development shell).
+
 ## Home Manager
 
 ```nix
