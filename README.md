@@ -1,7 +1,6 @@
 # Vellum
 
-`vellum` is a small native Wayland overlay for drawing directly over the live desktop. It is
-designed for niri and works with niri's built-in screenshot tool.
+`vellum` is a small native Wayland overlay for drawing directly over the live desktop, tested on niri.
 
 https://github.com/user-attachments/assets/f8171063-16a8-497f-ba20-9e11bc50727e
 
