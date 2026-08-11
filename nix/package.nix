@@ -9,11 +9,21 @@
   libGL,
   vulkan-loader,
 }:
-rustPlatform.buildRustPackage rec {
+let
   pname = "vellum";
-  version = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).package.version;
+  src = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ../Cargo.toml
+      ../Cargo.lock
+      ../src
+    ];
+  };
 
-  src = ../.;
+  cargoToml = (builtins.fromTOML (builtins.readFile "${src}/Cargo.toml"));
+in rustPlatform.buildRustPackage {
+  inherit pname src;
+  version = cargoToml.package.version;
 
   cargoLock.lockFile = "${src}/Cargo.lock";
 
