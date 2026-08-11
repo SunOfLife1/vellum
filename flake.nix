@@ -25,7 +25,7 @@
 
     devShells.x86_64-linux.default = pkgs.mkShell {
       inputsFrom = [vellum];
-      packages = with pkgs; [cargo rustc rustfmt clippy];
+      packages = with pkgs; [cargo rustc rustfmt clippy rust-analyzer];
     };
 
     homeModules.default = {
