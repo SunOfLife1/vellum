@@ -25,7 +25,22 @@
 
     devShells.x86_64-linux.default = pkgs.mkShell {
       inputsFrom = [vellum];
-      packages = with pkgs; [cargo rustc rustfmt clippy rust-analyzer];
+      packages = with pkgs; [
+        cargo
+        rustc
+        rustfmt
+        clippy
+        rust-analyzer
+      ];
+      
+      RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
+
+      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+        pkgs.libGL
+        pkgs.vulkan-loader
+        pkgs.wayland
+        pkgs.libxkbcommon
+      ];
     };
 
     homeModules.default = {
