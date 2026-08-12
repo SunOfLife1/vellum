@@ -2,15 +2,26 @@ pub type Color = [f32; 4];
 
 pub const CONTROL_SOCKET: &str = "vellum.sock";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, clap::Subcommand)]
 pub enum Command {
+    /// Toggle drawing mode
     Toggle,
+    /// Undo the last stroke
     Undo,
+    /// Redo the last undone stroke
     Redo,
+    /// Clear the canvas
     Clear,
+    /// Clear and deactivate
     ClearAndDeactivate,
+    /// Set stroke width in pixels
     StrokeWidth { width: f32 },
-    StrokeColor { color: Color },
+    /// Set stroke color (hex, optional alpha)
+    StrokeColor {
+        #[arg(value_parser = parse_color)]
+        color: Color
+    },
+    /// Exit the app
     Exit,
 }
 

@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use wayland_client::backend::WaylandError;
+use clap::Parser;
 
 mod protocol;
 mod render;
@@ -15,72 +16,36 @@ use protocol::{CONTROL_SOCKET, Color, Command, parse_color, valid_width};
 
 const MAX_SOCKET_MESSAGE: usize = 4096;
 
-#[derive(Default)]
+#[derive(clap_derive::Parser)]
+#[command(version, about, long_about = None)]
+#[command(args_conflicts_with_subcommands = true)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Read this TOML preferences file
+    #[arg(long, conflicts_with = "no_config")]
     config: Option<std::path::PathBuf>,
+
+    /// Ignore preferences files
+    #[arg(long)]
     no_config: bool,
+
+    /// Set the initial stroke width
+    #[arg(short = 'w', long)]
     stroke_width: Option<f32>,
+
+    /// Set the initial #RRGGBB[AA] color
+    #[arg(short = 'c', long)]
     stroke_color: Option<String>,
+
+    /// Set the initial tool
+    #[arg(long)]
     default_tool: Option<String>,
+
+    /// Use vulkan or opengl
+    #[arg(short = 'b', long)]
     force_backend: Option<render::Backend>,
-}
-
-const HELP: &str = r#"Usage: vellum [OPTIONS]
-       vellum COMMAND [VALUE]
-
-Commands:
-  toggle, undo, redo, clear, clear-and-deactivate
-  stroke-width PX, stroke-color #RRGGBB[AA], exit
-
-Options:
-  --config PATH          Read this TOML preferences file
-  --no-config            Ignore preferences files
-  -w, --stroke-width PX  Set the initial stroke width
-  -c, --stroke-color HEX Set the initial #RRGGBB[AA] color
-  --default-tool TOOL    Set the initial tool
-  -b, --force-backend B  Use vulkan or opengl
-  -h, --help             Print help
-  -V, --version          Print version"#;
-
-impl Cli {
-    fn parse(arguments: impl Iterator<Item = String>) -> Result<Self, String> {
-        let mut cli = Self::default();
-        let mut args = arguments.peekable();
-        while let Some(argument) = args.next() {
-            let value = |args: &mut std::iter::Peekable<_>| {
-                args.next()
-                    .ok_or_else(|| format!("{argument} requires a value"))
-            };
-            match argument.as_str() {
-                "--config" => cli.config = Some(value(&mut args)?.into()),
-                "--no-config" => cli.no_config = true,
-                "-w" | "--stroke-width" => {
-                    cli.stroke_width =
-                        Some(value(&mut args)?.parse().map_err(|_| {
-                            "stroke width must be a positive finite number".to_string()
-                        })?)
-                }
-                "-c" | "--stroke-color" => cli.stroke_color = Some(value(&mut args)?),
-                "--default-tool" => cli.default_tool = Some(value(&mut args)?),
-                "-b" | "--force-backend" => {
-                    cli.force_backend = Some(value(&mut args)?.parse().map_err(str::to_string)?)
-                }
-                "-h" | "--help" => {
-                    println!("{HELP}");
-                    std::process::exit(0);
-                }
-                "-V" | "--version" => {
-                    println!("vellum {}", env!("CARGO_PKG_VERSION"));
-                    std::process::exit(0);
-                }
-                _ => return Err(format!("unknown option {argument:?}\n{HELP}")),
-            }
-        }
-        if cli.no_config && cli.config.is_some() {
-            return Err("--config conflicts with --no-config".into());
-        }
-        Ok(cli)
-    }
 }
 
 const DEFAULT_PALETTE: [&str; 8] = [
@@ -199,28 +164,16 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let mut arguments = std::env::args().skip(1).peekable();
-    if arguments
-        .peek()
-        .is_some_and(|argument| !argument.starts_with('-'))
-    {
-        return send_command(arguments);
+    let arguments = Cli::parse();
+    if let Some(subcommand) = &arguments.command {
+        return send_command(subcommand);
     }
-    let settings = Settings::load(Cli::parse(arguments)?)?;
+    let settings = Settings::load(arguments)?;
     run_overlay(settings);
     Ok(())
 }
 
-fn send_command(arguments: impl Iterator<Item = String>) -> Result<(), String> {
-    let message = arguments
-        .map(|argument| argument.replace('-', "_"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    if matches!(message.as_str(), "help") {
-        println!("{HELP}");
-        return Ok(());
-    }
-    let command = Command::deserialize(message.as_bytes()).map_err(str::to_owned)?;
+fn send_command(command: &Command) -> Result<(), String> {
     let socket_addr =
         SocketAddr::from_abstract_name(CONTROL_SOCKET).map_err(|error| error.to_string())?;
     let socket = UnixDatagram::unbound().map_err(|error| error.to_string())?;
