@@ -5,18 +5,7 @@
     nixpkgs,
   }: let
     pkgs = nixpkgs.legacyPackages.x86_64-linux;
-    vellum = pkgs.rustPlatform.buildRustPackage {
-      pname = "vellum";
-      version = (fromTOML (builtins.readFile ./Cargo.toml)).package.version;
-      src = self;
-      cargoLock.lockFile = ./Cargo.lock;
-      nativeBuildInputs = with pkgs; [pkg-config makeWrapper];
-      buildInputs = with pkgs; [wayland wayland-protocols libxkbcommon libGL vulkan-loader];
-      postInstall = ''
-        wrapProgram $out/bin/vellum \
-          --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (with pkgs; [libGL vulkan-loader])}
-      '';
-    };
+    vellum = pkgs.callPackage ./nix/package.nix {};
   in {
     packages.x86_64-linux = {
       inherit vellum;
