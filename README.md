@@ -28,7 +28,7 @@ Mod+A { spawn "vellum" "toggle"; }
 | Left drag | Draw or manipulate the selection |
 | Hold right click | Open the tool wheel |
 | Release right click in the center | Open the color wheel |
-| Middle drag | Temporarily erase annotations |
+| Middle drag | Erase annotations |
 | Mouse wheel | Change stroke width or text size |
 | `Ctrl` + wheel | Change opacity |
 | `Shift` + wheel | Change roundness |
