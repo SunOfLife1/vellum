@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::SocketAddr;
 use std::os::unix::net::UnixDatagram;
@@ -15,6 +16,7 @@ mod state;
 use protocol::{CONTROL_SOCKET, Color, Command, parse_color, valid_width};
 
 const MAX_SOCKET_MESSAGE: usize = 4096;
+const CONFIG_FILE: &str = "vellum/config.toml";
 
 #[derive(clap_derive::Parser)]
 #[command(version, about, long_about = None)]
@@ -80,16 +82,7 @@ impl Settings {
         } else if let Some(path) = &cli.config {
             read_config(path)?
         } else {
-            default_config_path().map_or_else(
-                || Ok(FileConfig::default()),
-                |path| {
-                    if path.exists() {
-                        read_config(&path)
-                    } else {
-                        Ok(FileConfig::default())
-                    }
-                },
-            )?
+            read_first_config(default_config_paths())?
         };
 
         let stroke_width = cli.stroke_width.or(file.stroke_width).unwrap_or(5.0);
@@ -146,14 +139,63 @@ fn parse_named_color(name: &str, value: &str) -> Result<Color, String> {
 fn read_config(path: &Path) -> Result<FileConfig, String> {
     let contents = std::fs::read_to_string(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-    toml::from_str(&contents).map_err(|error| format!("invalid {}: {error}", path.display()))
+    parse_config(path, &contents)
 }
 
-fn default_config_path() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-        .map(|directory| directory.join("vellum/config.toml"))
+fn read_optional_config(path: &Path) -> Result<Option<FileConfig>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => parse_config(path, &contents).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("could not read {}: {error}", path.display())),
+    }
+}
+
+fn parse_config(path: &Path, contents: &str) -> Result<FileConfig, String> {
+    toml::from_str(contents).map_err(|error| format!("invalid {}: {error}", path.display()))
+}
+
+fn read_first_config(paths: impl IntoIterator<Item = PathBuf>) -> Result<FileConfig, String> {
+    for path in paths {
+        if let Some(config) = read_optional_config(&path)? {
+            return Ok(config);
+        }
+    }
+    Ok(FileConfig::default())
+}
+
+fn default_config_paths() -> Vec<PathBuf> {
+    config_paths(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+        std::env::var_os("XDG_CONFIG_DIRS"),
+    )
+}
+
+fn config_paths(
+    xdg_config_home: Option<OsString>,
+    home: Option<OsString>,
+    xdg_config_dirs: Option<OsString>,
+) -> Vec<PathBuf> {
+    let user = absolute_path(xdg_config_home)
+        .or_else(|| absolute_path(home).map(|path| path.join(".config")));
+    let mut paths: Vec<_> = user
+        .into_iter()
+        .map(|path| path.join(CONFIG_FILE))
+        .collect();
+
+    match xdg_config_dirs.filter(|value| !value.is_empty()) {
+        Some(dirs) => paths.extend(
+            std::env::split_paths(&dirs)
+                .filter(|path| path.is_absolute())
+                .map(|path| path.join(CONFIG_FILE)),
+        ),
+        None => paths.push(PathBuf::from("/etc/xdg").join(CONFIG_FILE)),
+    }
+    paths
+}
+
+fn absolute_path(value: Option<OsString>) -> Option<PathBuf> {
+    value.map(PathBuf::from).filter(|path| path.is_absolute())
 }
 
 fn main() {
@@ -304,5 +346,94 @@ fn run_overlay(settings: Settings) {
             }
         }
         state.handle_timeouts(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "vellum-config-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn follows_xdg_precedence() {
+        assert_eq!(
+            config_paths(
+                Some("/home/user/config".into()),
+                Some("/ignored".into()),
+                Some("/etc/first:/etc/second".into()),
+            ),
+            [
+                "/home/user/config/vellum/config.toml",
+                "/etc/first/vellum/config.toml",
+                "/etc/second/vellum/config.toml",
+            ]
+            .map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn ignores_relative_xdg_paths_and_uses_defaults() {
+        assert_eq!(
+            config_paths(
+                Some("relative".into()),
+                Some("/home/user".into()),
+                Some("relative:/etc/custom".into()),
+            ),
+            [
+                "/home/user/.config/vellum/config.toml",
+                "/etc/custom/vellum/config.toml",
+            ]
+            .map(PathBuf::from)
+        );
+        assert_eq!(
+            config_paths(None, None, Some(OsString::new())),
+            [PathBuf::from("/etc/xdg/vellum/config.toml")]
+        );
+    }
+
+    #[test]
+    fn reads_the_first_existing_config() {
+        let directory = TempDir::new();
+        let missing = directory.0.join("missing.toml");
+        let first = directory.0.join("first.toml");
+        let second = directory.0.join("second.toml");
+        std::fs::write(&first, "stroke_width = 3.0").unwrap();
+        std::fs::write(&second, "stroke_width = 9.0").unwrap();
+
+        let config = read_first_config([missing, first, second]).unwrap();
+        assert_eq!(config.stroke_width, Some(3.0));
+    }
+
+    #[test]
+    fn reports_invalid_config_instead_of_falling_back() {
+        let directory = TempDir::new();
+        let invalid = directory.0.join("invalid.toml");
+        let fallback = directory.0.join("fallback.toml");
+        std::fs::write(&invalid, "unknown = true").unwrap();
+        std::fs::write(&fallback, "stroke_width = 9.0").unwrap();
+
+        let error = read_first_config([invalid.clone(), fallback]).unwrap_err();
+        assert!(error.contains(&format!("invalid {}", invalid.display())));
     }
 }
