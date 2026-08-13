@@ -15,11 +15,14 @@ pub enum Command {
     /// Clear and deactivate
     ClearAndDeactivate,
     /// Set stroke width in pixels
-    StrokeWidth { width: f32 },
+    StrokeWidth {
+        #[arg(value_parser = parse_width)]
+        width: f32,
+    },
     /// Set stroke color (hex, optional alpha)
     StrokeColor {
         #[arg(value_parser = parse_color)]
-        color: Color
+        color: Color,
     },
     /// Exit the app
     Exit,
@@ -49,14 +52,7 @@ impl Command {
             Some("clear") => Self::Clear,
             Some("clear_and_deactivate") => Self::ClearAndDeactivate,
             Some("stroke_width") => {
-                let width = parts
-                    .next()
-                    .ok_or("stroke_width requires a value")?
-                    .parse()
-                    .map_err(|_| "invalid stroke width")?;
-                if !valid_width(width) {
-                    return Err("stroke width must be positive and finite");
-                }
+                let width = parse_width(parts.next().ok_or("stroke_width requires a value")?)?;
                 Self::StrokeWidth { width }
             }
             Some("stroke_color") => Self::StrokeColor {
@@ -75,6 +71,14 @@ impl Command {
 
 pub fn valid_width(width: f32) -> bool {
     width.is_finite() && width > 0.0
+}
+
+fn parse_width(value: &str) -> Result<f32, &'static str> {
+    let width = value.parse().map_err(|_| "invalid stroke width")?;
+    if !valid_width(width) {
+        return Err("stroke width must be positive and finite");
+    }
+    Ok(width)
 }
 
 pub fn parse_color(value: &str) -> Result<Color, &'static str> {

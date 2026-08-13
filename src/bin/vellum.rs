@@ -4,9 +4,9 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use clap::Parser;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use wayland_client::backend::WaylandError;
-use clap::Parser;
 
 mod protocol;
 mod render;
