@@ -2,6 +2,7 @@ use super::freehand;
 use crate::render::{Geometry, Vertex};
 
 pub(super) const HIT_SLOP: f32 = 5.0;
+const POLYGON_CORNER_INSET: f32 = 0.3;
 
 pub type ElementId = u64;
 
@@ -233,20 +234,33 @@ impl Element {
             } => {
                 let centerline = smooth.then(|| freehand::centerline(points, self.style.width));
                 let points = centerline.as_deref().unwrap_or(points);
-                polyline_hit(
-                    points,
-                    point,
-                    if *smooth {
-                        self.style.width * 0.8 + HIT_SLOP
-                    } else {
-                        tolerance
-                    },
-                ) || matches!(end_marker, Some(EndMarker::Arrow))
-                    && path_endpoints(points).is_some_and(|(start, end)| {
-                        let [tip, side_a, side_b] = arrow_head(start, end, self.style.width);
-                        triangle_contains(point, tip, side_a, side_b)
-                            || polyline_hit(&[tip, side_a, side_b, tip], point, tolerance)
-                    })
+                if matches!(end_marker, Some(EndMarker::Arrow))
+                    && let Some((start, end)) = path_endpoints(points)
+                {
+                    let head = arrow_head(start, end, self.style.width);
+                    let tolerance_squared = tolerance * tolerance;
+                    let shaft_hit = points[..points.len() - 1].windows(2).any(|segment| {
+                        segment_distance_squared(point, segment[0], segment[1]) <= tolerance_squared
+                    }) || (head.shaft_length > f32::EPSILON
+                        && segment_distance_squared(point, start, head.base) <= tolerance_squared);
+                    shaft_hit
+                        || rounded_triangle_hit(
+                            &head.vertices,
+                            self.style.roundness,
+                            point,
+                            HIT_SLOP,
+                        )
+                } else {
+                    polyline_hit(
+                        points,
+                        point,
+                        if *smooth {
+                            self.style.width * 0.8 + HIT_SLOP
+                        } else {
+                            tolerance
+                        },
+                    )
+                }
             }
             ElementKind::Rectangle { min, max } => {
                 rounded_rectangle_hit(*min, *max, self.style.roundness, point, tolerance)
@@ -275,7 +289,7 @@ pub(super) fn bounds_for(kind: &ElementKind, width: f32) -> Bounds {
             || Bounds::from_points(points.iter().copied()),
             |(start, end)| {
                 let head = arrow_head(start, end, width);
-                Bounds::from_points(points.iter().copied().chain(head))
+                Bounds::from_points(points.iter().copied().chain(head.vertices))
             },
         ),
         ElementKind::Path { points, .. } => Bounds::from_points(points.iter().copied()),
@@ -345,7 +359,7 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
                 builder.begin(point(start.x, start.y));
                 for (index, next) in points[1..].iter().enumerate() {
                     let next = if index + 2 == points.len() {
-                        marker.map_or(*next, |[_, side_a, side_b]| side_a.midpoint(side_b))
+                        marker.map_or(*next, |head| head.base)
                     } else {
                         *next
                     };
@@ -354,12 +368,17 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
                 builder.end(false);
             }
             if let Some((start, end)) = path_endpoints(points) {
-                caps.push((points[0], points[0] - points[1]));
+                let cap_roundness = marker.map_or(style.roundness, |head| {
+                    let progress = (head.shaft_length / (style.width * 0.5)).clamp(0.0, 1.0);
+                    let smooth_progress = progress * progress * (3.0 - 2.0 * progress);
+                    style.roundness * smooth_progress
+                });
+                caps.push((points[0], points[0] - points[1], cap_roundness));
                 if marker.is_none() {
-                    caps.push((end, end - start));
+                    caps.push((end, end - start, style.roundness));
                 }
             } else if let Some(point) = points.first() {
-                caps.push((*point, Point::new(1.0, 0.0)));
+                caps.push((*point, Point::new(1.0, 0.0), style.roundness));
             }
         }
         ElementKind::Path { smooth: true, .. } => unreachable!(),
@@ -390,17 +409,21 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
         )
         .expect("valid annotation path");
     let mut geometry = Geometry::new(buffers);
-    for (center, outward) in caps {
+    for (center, outward, roundness) in caps {
         geometry.append(freehand::rounded_cap(
             center,
             outward,
             style.width * 0.5,
-            style.roundness,
+            roundness,
             style.color,
         ));
     }
-    if let Some(vertices) = marker {
-        geometry.append(rounded_polygon(&vertices, style.roundness, style.color));
+    if let Some(head) = marker {
+        geometry.append(rounded_triangle(
+            &head.vertices,
+            style.roundness,
+            style.color,
+        ));
     }
     geometry
 }
@@ -494,84 +517,132 @@ pub(super) fn default_roundness(kind: &ElementKind) -> Option<f32> {
 }
 
 fn polyline_hit(points: &[Point], point: Point, tolerance: f32) -> bool {
+    let tolerance_squared = tolerance * tolerance;
     match points {
         [] => false,
-        [only] => only.distance_squared(point) <= tolerance.powi(2),
+        [only] => only.distance_squared(point) <= tolerance_squared,
         _ => points.windows(2).any(|segment| {
-            segment_distance_squared(point, segment[0], segment[1]) <= tolerance.powi(2)
+            segment_distance_squared(point, segment[0], segment[1]) <= tolerance_squared
         }),
     }
 }
 
-fn arrow_head(start: Point, end: Point, width: f32) -> [Point; 3] {
+#[derive(Clone, Copy)]
+struct ArrowHead {
+    vertices: [Point; 3],
+    base: Point,
+    shaft_length: f32,
+}
+
+fn arrow_head(start: Point, end: Point, width: f32) -> ArrowHead {
     let delta = end - start;
     let length = delta.length();
     if length <= f32::EPSILON {
-        return [end; 3];
+        return ArrowHead {
+            vertices: [end; 3],
+            base: end,
+            shaft_length: 0.0,
+        };
     }
     let direction = Point::new(delta.x / length, delta.y / length);
     let normal = Point::new(-direction.y, direction.x);
-    let size = (width * 5.0).clamp(16.0, 64.0).min(length * 0.8);
+    let ideal_size = (width * 5.0).max(16.0);
+    let size = ideal_size.min(length);
     let base = Point::new(end.x - direction.x * size, end.y - direction.y * size);
     let half = size * 0.45;
-    [
-        end,
-        Point::new(base.x + normal.x * half, base.y + normal.y * half),
-        Point::new(base.x - normal.x * half, base.y - normal.y * half),
-    ]
+    ArrowHead {
+        vertices: [
+            end,
+            Point::new(base.x + normal.x * half, base.y + normal.y * half),
+            Point::new(base.x - normal.x * half, base.y - normal.y * half),
+        ],
+        base,
+        shaft_length: length - size,
+    }
 }
 
-fn rounded_polygon(vertices: &[Point], roundness: f32, color: [f32; 4]) -> Geometry {
-    if vertices.len() < 3 {
-        return Geometry::empty();
-    }
-    let mut outline = Vec::with_capacity(vertices.len() * 5);
+fn rounded_triangle(vertices: &[Point; 3], roundness: f32, color: [f32; 4]) -> Geometry {
+    use lyon_tessellation::path::Path;
+    use lyon_tessellation::path::math::point;
+    use lyon_tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex};
+
+    let mut builder = Path::builder();
     if roundness <= f32::EPSILON {
-        outline.extend_from_slice(vertices);
+        builder.begin(point(vertices[0].x, vertices[0].y));
+        for vertex in &vertices[1..] {
+            builder.line_to(point(vertex.x, vertex.y));
+        }
     } else {
-        let inset = 0.3 * roundness;
+        let inset = POLYGON_CORNER_INSET * roundness;
+        let first = vertices[0];
+        let first_before = first + (vertices[vertices.len() - 1] - first) * inset;
+        builder.begin(point(first_before.x, first_before.y));
         for index in 0..vertices.len() {
             let vertex = vertices[index];
-            let previous = vertices[(index + vertices.len() - 1) % vertices.len()];
             let next = vertices[(index + 1) % vertices.len()];
-            let before = vertex + (previous - vertex) * inset;
             let after = vertex + (next - vertex) * inset;
-            outline.push(before);
-            for step in 1..=4 {
-                let t = step as f32 * 0.25;
-                let inverse = 1.0 - t;
-                outline.push(
-                    before * inverse.powi(2) + vertex * (2.0 * inverse * t) + after * t.powi(2),
-                );
+            builder.quadratic_bezier_to(point(vertex.x, vertex.y), point(after.x, after.y));
+            let next_before = next + (vertex - next) * inset;
+            if index + 1 < vertices.len() {
+                builder.line_to(point(next_before.x, next_before.y));
             }
         }
     }
-    let center = outline
-        .iter()
-        .copied()
-        .fold(Point::default(), |sum, point| sum + point)
-        * (1.0 / outline.len() as f32);
-    let mut buffers = lyon_tessellation::VertexBuffers {
-        vertices: std::iter::once(center)
-            .chain(outline.iter().copied())
-            .map(|point| Vertex::at([point.x, point.y], color))
-            .collect(),
-        indices: Vec::with_capacity(outline.len() * 3),
-    };
-    for index in 0..outline.len() as u32 {
-        buffers
-            .indices
-            .extend([0, index + 1, (index + 1) % outline.len() as u32 + 1]);
-    }
+    builder.close();
+
+    let mut buffers = lyon_tessellation::VertexBuffers::new();
+    FillTessellator::new()
+        .tessellate_path(
+            &builder.build(),
+            &FillOptions::default(),
+            &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex| {
+                Vertex::at(vertex.position().to_array(), color)
+            }),
+        )
+        .expect("valid rounded polygon");
     Geometry::new(buffers)
 }
 
-fn triangle_contains(point: Point, a: Point, b: Point, c: Point) -> bool {
-    let side = |start: Point, end: Point| {
-        (point.x - end.x) * (start.y - end.y) - (start.x - end.x) * (point.y - end.y)
+fn rounded_triangle_hit(
+    vertices: &[Point; 3],
+    roundness: f32,
+    point: Point,
+    tolerance: f32,
+) -> bool {
+    const CURVE_STEPS: usize = 8;
+
+    let inset = POLYGON_CORNER_INSET * roundness;
+    let mut has_positive = false;
+    let mut has_negative = false;
+    let mut near_edge = false;
+    let tolerance_squared = tolerance * tolerance;
+    let mut test_segment = |start: Point, end: Point| {
+        let side =
+            (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x);
+        has_positive |= side > 0.0;
+        has_negative |= side < 0.0;
+        near_edge |= segment_distance_squared(point, start, end) <= tolerance_squared;
     };
-    let sides = [side(a, b), side(b, c), side(c, a)];
-    !sides.iter().any(|side| *side < 0.0) || !sides.iter().any(|side| *side > 0.0)
+
+    for index in 0..vertices.len() {
+        let vertex = vertices[index];
+        let previous = vertices[(index + vertices.len() - 1) % vertices.len()];
+        let next = vertices[(index + 1) % vertices.len()];
+        let before = vertex + (previous - vertex) * inset;
+        let after = vertex + (next - vertex) * inset;
+        let mut start = before;
+        for step in 1..=CURVE_STEPS {
+            let t = step as f32 / CURVE_STEPS as f32;
+            let inverse = 1.0 - t;
+            let end = before * (inverse * inverse) + vertex * (2.0 * inverse * t) + after * (t * t);
+            test_segment(start, end);
+            start = end;
+        }
+        let next_before = next + (vertex - next) * inset;
+        test_segment(after, next_before);
+    }
+
+    near_edge || has_positive != has_negative
 }
 
 fn path_endpoints(points: &[Point]) -> Option<(Point, Point)> {
