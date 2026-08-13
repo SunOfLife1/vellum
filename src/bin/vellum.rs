@@ -80,16 +80,14 @@ impl Settings {
         } else if let Some(path) = &cli.config {
             read_config(path)?
         } else {
-            default_config_path().map_or_else(
-                || Ok(FileConfig::default()),
-                |path| {
-                    if path.exists() {
-                        read_config(&path)
-                    } else {
-                        Ok(FileConfig::default())
-                    }
-                },
-            )?
+            // try user config first
+            // if that fails fall back to system config
+            default_user_config_path().map_or_else(read_system_config, |path| {
+                match read_optional_config(&path)? {
+                    Some(config) => Ok(config),
+                    None => read_system_config(),
+                }
+            })?
         };
 
         let stroke_width = cli.stroke_width.or(file.stroke_width).unwrap_or(5.0);
@@ -149,11 +147,27 @@ fn read_config(path: &Path) -> Result<FileConfig, String> {
     toml::from_str(&contents).map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
-fn default_config_path() -> Option<PathBuf> {
+fn read_optional_config(path: &Path) -> Result<Option<FileConfig>, String> {
+    if path.exists() {
+        read_config(path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn read_system_config() -> Result<FileConfig, String> {
+    Ok(read_optional_config(&default_system_config_path())?.unwrap_or(FileConfig::default()))
+}
+
+fn default_user_config_path() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .map(|directory| directory.join("vellum/config.toml"))
+}
+
+fn default_system_config_path() -> PathBuf {
+    "/etc/vellum/config.toml".into()
 }
 
 fn main() {
