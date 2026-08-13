@@ -4,33 +4,37 @@
     self,
     nixpkgs,
   }: let
-    pkgs = nixpkgs.legacyPackages.x86_64-linux;
-    vellum = pkgs.callPackage ./nix/package.nix {};
+    systems = [ "aarch64-linux" "x86_64-linux" ];
+
+    eachSystem = f: nixpkgs.lib.genAttrs systems
+      (system: f system nixpkgs.legacyPackages.${system});
   in {
-    packages.x86_64-linux = {
-      inherit vellum;
-      default = vellum;
-    };
+    packages = eachSystem (system: pkgs: {
+      vellum = pkgs.callPackage ./nix/package.nix {};
+      default = self.packages.${system}.vellum;
+    });
 
-    devShells.x86_64-linux.default = pkgs.mkShell {
-      inputsFrom = [vellum];
-      packages = with pkgs; [
-        cargo
-        rustc
-        rustfmt
-        clippy
-        rust-analyzer
-      ];
-      
-      RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
+    devShells = eachSystem (system: pkgs: {
+      default = pkgs.mkShell {
+        inputsFrom = [self.packages.${system}.vellum];
+        packages = with pkgs; [
+          cargo
+          rustc
+          rustfmt
+          clippy
+          rust-analyzer
+        ];
+        
+        RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
 
-      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
-        pkgs.libGL
-        pkgs.vulkan-loader
-        pkgs.wayland
-        pkgs.libxkbcommon
-      ];
-    };
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+          pkgs.libGL
+          pkgs.vulkan-loader
+          pkgs.wayland
+          pkgs.libxkbcommon
+        ];
+      };
+    });
 
     homeModules.default = {
       config,
