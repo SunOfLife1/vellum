@@ -12,8 +12,8 @@ to load no file.
 | `default_tool` | string | `"pen"` | Tool selected on startup: `pen`, `line`, `arrow`, `rectangle`, `ellipse`, `text`, `eraser`, or `select` |
 | `remember_last_tool` | boolean | `true` | Keep the selected tool when drawing mode is reopened |
 | `stroke_width` | number | `5.0` | Initial size for pen and shape tools; each keeps its own adjusted size during the session |
-| `default_color` | string | `"#FF0000"` | Initial `#RRGGBB` or `#RRGGBBAA` color |
-| `palette` | array of strings | Eight standard colors | Between 2 and 12 colors |
+| `default_color` | string | `"#FF0000"` | Initial `#RRGGBB` color |
+| `palette` | array of strings | Eight standard colors | Between 2 and 12 `#RRGGBB` colors |
 | `feedback_duration_ms` | integer | `500` | How long property feedback remains visible, from `0` to `60000` milliseconds |
 
 ## Defaults

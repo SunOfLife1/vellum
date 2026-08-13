@@ -42,10 +42,10 @@ pub struct DrawState {
 impl DrawState {
     pub fn new(
         stroke_width: f32,
-        stroke_color: crate::protocol::Color,
+        stroke_color: crate::protocol::Rgb,
         default_tool: Tool,
         remember_last_tool: bool,
-        palette: Vec<crate::protocol::Color>,
+        palette: Vec<crate::protocol::Rgb>,
         feedback_duration: Duration,
     ) -> Self {
         Self {
@@ -98,7 +98,7 @@ impl DrawState {
         self.record(damage)
     }
 
-    pub fn set_stroke_color(&mut self, color: crate::protocol::Color) -> bool {
+    pub fn set_stroke_color(&mut self, color: crate::protocol::Rgb) -> bool {
         let damage = self.editor.set_color(color);
         self.record(damage)
     }

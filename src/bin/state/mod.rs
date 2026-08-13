@@ -311,7 +311,7 @@ impl State {
         }
     }
 
-    pub fn set_stroke_color(&mut self, color: crate::protocol::Color) {
+    pub fn set_stroke_color(&mut self, color: crate::protocol::Rgb) {
         if self.draw.set_stroke_color(color) {
             self.request_render();
         }

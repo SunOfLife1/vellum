@@ -16,6 +16,17 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
 }
 
+override target_is_srgb: bool;
+
+// Vertex colors are stored as sRGB; blending and filtering operate in linear space.
+fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
+    return select(
+        color / 12.92,
+        pow((color + 0.055) / 1.055, vec3(2.4)),
+        color > vec3(0.04045),
+    );
+}
+
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
@@ -24,7 +35,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         1.0 - (in.pos.y * 2.0) / info.screen_size.y,
         0.0, 1.0,
     );
-    out.color = in.color;
+    out.color = vec4(
+        select(in.color.rgb, srgb_to_linear(in.color.rgb), target_is_srgb),
+        in.color.a,
+    );
     return out;
 }
 

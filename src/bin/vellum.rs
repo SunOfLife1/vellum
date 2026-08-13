@@ -13,7 +13,7 @@ mod protocol;
 mod render;
 mod state;
 
-use protocol::{CONTROL_SOCKET, Color, Command, parse_color, valid_width};
+use protocol::{CONTROL_SOCKET, Command, Rgb, parse_color, valid_width};
 
 const MAX_SOCKET_MESSAGE: usize = 4096;
 const CONFIG_FILE: &str = "vellum/config.toml";
@@ -37,7 +37,7 @@ struct Cli {
     #[arg(short = 'w', long)]
     stroke_width: Option<f32>,
 
-    /// Set the initial #RRGGBB[AA] color
+    /// Set the initial #RRGGBB color
     #[arg(short = 'c', long)]
     stroke_color: Option<String>,
 
@@ -67,11 +67,11 @@ struct FileConfig {
 
 struct Settings {
     stroke_width: f32,
-    stroke_color: Color,
+    stroke_color: Rgb,
     force_backend: Option<render::Backend>,
     default_tool: state::Tool,
     remember_last_tool: bool,
-    palette: Vec<Color>,
+    palette: Vec<Rgb>,
     feedback_duration: Duration,
 }
 
@@ -132,7 +132,7 @@ impl Settings {
     }
 }
 
-fn parse_named_color(name: &str, value: &str) -> Result<Color, String> {
+fn parse_named_color(name: &str, value: &str) -> Result<Rgb, String> {
     parse_color(value).map_err(|error| format!("invalid {name} {value:?}: {error}"))
 }
 

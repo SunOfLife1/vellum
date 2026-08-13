@@ -294,6 +294,7 @@ impl WgpuState {
             }],
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("annotations.wgsl"));
+        let shader_constants = &[("target_is_srgb", format.is_srgb() as u8 as f64)];
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("annotation pipeline"),
             bind_group_layouts: &[&bind_group_layout],
@@ -305,7 +306,10 @@ impl WgpuState {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: shader_constants,
+                    ..Default::default()
+                },
                 buffers: &[Vertex::DESC],
             },
             fragment: Some(wgpu::FragmentState {

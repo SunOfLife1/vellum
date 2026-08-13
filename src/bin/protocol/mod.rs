@@ -1,4 +1,4 @@
-pub type Color = [f32; 4];
+pub type Rgb = [f32; 3];
 
 pub const CONTROL_SOCKET: &str = "vellum.sock";
 
@@ -19,10 +19,10 @@ pub enum Command {
         #[arg(value_parser = parse_width)]
         width: f32,
     },
-    /// Set stroke color (hex, optional alpha)
+    /// Set stroke color (#RRGGBB)
     StrokeColor {
         #[arg(value_parser = parse_color)]
-        color: Color,
+        color: Rgb,
     },
     /// Exit the app
     Exit,
@@ -81,31 +81,21 @@ fn parse_width(value: &str) -> Result<f32, &'static str> {
     Ok(width)
 }
 
-pub fn parse_color(value: &str) -> Result<Color, &'static str> {
+pub fn parse_color(value: &str) -> Result<Rgb, &'static str> {
     let hex = value.strip_prefix('#').ok_or("color must start with #")?;
-    if !matches!(hex.len(), 6 | 8) {
-        return Err("color must be #RRGGBB or #RRGGBBAA");
+    if hex.len() != 6 {
+        return Err("color must be #RRGGBB");
     }
     let value = u32::from_str_radix(hex, 16).map_err(|_| "color contains a non-hex digit")?;
-    let value = if hex.len() == 6 {
-        (value << 8) | 0xff
-    } else {
-        value
-    };
     Ok([
-        ((value >> 24) & 0xff) as f32 / 255.0,
         ((value >> 16) & 0xff) as f32 / 255.0,
         ((value >> 8) & 0xff) as f32 / 255.0,
         (value & 0xff) as f32 / 255.0,
     ])
 }
 
-fn format_color(color: Color) -> String {
+fn format_color(color: Rgb) -> String {
     let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let [red, green, blue, alpha] = color.map(channel);
-    if alpha == 255 {
-        format!("#{red:02X}{green:02X}{blue:02X}")
-    } else {
-        format!("#{red:02X}{green:02X}{blue:02X}{alpha:02X}")
-    }
+    let [red, green, blue] = color.map(channel);
+    format!("#{red:02X}{green:02X}{blue:02X}")
 }

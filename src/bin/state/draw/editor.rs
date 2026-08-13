@@ -143,14 +143,14 @@ pub struct Editor {
 impl Editor {
     pub fn new(
         width: f32,
-        color: crate::protocol::Color,
+        rgb: crate::protocol::Rgb,
         default_tool: Tool,
         remember_last_tool: bool,
-        palette: Vec<crate::protocol::Color>,
+        palette: Vec<crate::protocol::Rgb>,
     ) -> Self {
         let width = width.clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
         let text_size = DEFAULT_TEXT_SIZE;
-        let opacity = color[3];
+        let opacity = 1.0;
         let mut tool_properties = [
             Tool::PEN_ROUNDNESS,
             Tool::LINE_ROUNDNESS,
@@ -172,7 +172,7 @@ impl Editor {
             tool: default_tool,
             style: Style {
                 width,
-                color,
+                color: [rgb[0], rgb[1], rgb[2], opacity],
                 roundness: active.map_or(0.5, |properties| properties.roundness),
             },
             elements: Vec::new(),
@@ -186,10 +186,7 @@ impl Editor {
             default_tool,
             tool_properties,
             remember_last_tool,
-            palette: palette
-                .into_iter()
-                .map(|[red, green, blue, _]| [red, green, blue])
-                .collect(),
+            palette,
         }
     }
 
@@ -289,16 +286,14 @@ impl Editor {
         Damage::from_preview(changed)
     }
 
-    pub fn set_color(&mut self, color: crate::protocol::Color) -> Damage {
-        let changed = self.style.color != color;
-        self.style.color = color;
-        for properties in &mut self.tool_properties {
-            properties.opacity = color[3];
-        }
-        if let Some(edit) = self.text_edit_mut() {
-            edit.style.color = color;
-        }
-        Damage::from_preview(changed && self.is_editing_text())
+    pub fn set_color(&mut self, rgb: crate::protocol::Rgb) -> Damage {
+        self.style.color[..3].copy_from_slice(&rgb);
+        let Some(edit) = self.text_edit_mut() else {
+            return Damage::None;
+        };
+        let changed = edit.style.color[..3] != rgb;
+        edit.style.color[..3].copy_from_slice(&rgb);
+        Damage::from_preview(changed)
     }
 
     pub fn handle_action(&mut self, action: Action) -> EditorEffect {
