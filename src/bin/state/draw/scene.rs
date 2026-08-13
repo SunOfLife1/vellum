@@ -663,16 +663,16 @@ fn rounded_triangle_hit(
     const CURVE_STEPS: usize = 8;
 
     let inset = POLYGON_CORNER_INSET * roundness;
-    let mut has_positive = false;
-    let mut has_negative = false;
+    let mut inside = false;
     let mut near_edge = false;
     let tolerance_squared = tolerance * tolerance;
     let mut test_segment = |start: Point, end: Point| {
-        let side =
-            (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x);
-        has_positive |= side > 0.0;
-        has_negative |= side < 0.0;
         near_edge |= segment_distance_squared(point, start, end) <= tolerance_squared;
+        if (start.y > point.y) != (end.y > point.y)
+            && point.x < start.x + (point.y - start.y) * (end.x - start.x) / (end.y - start.y)
+        {
+            inside = !inside;
+        }
     };
 
     for index in 0..vertices.len() {
@@ -693,7 +693,7 @@ fn rounded_triangle_hit(
         test_segment(after, next_before);
     }
 
-    near_edge || has_positive != has_negative
+    near_edge || inside
 }
 
 fn path_endpoints(points: &[Point]) -> Option<(Point, Point)> {
