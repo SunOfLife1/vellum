@@ -42,6 +42,10 @@ and `Alt` draws rectangles and ellipses from their center.
 
 Run `vellum --help` for startup options and socket commands.
 
+## Configuration
+
+See [Configuration](docs/configuration.md) for the available options, defaults, and file lookup order.
+
 ## Home Manager
 
 ```nix
