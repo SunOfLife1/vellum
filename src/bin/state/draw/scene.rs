@@ -355,26 +355,29 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
             smooth: false,
             ..
         } => {
-            if let Some(start) = points.first() {
-                builder.begin(point(start.x, start.y));
-                for (index, next) in points[1..].iter().enumerate() {
-                    let next = if index + 2 == points.len() {
-                        marker.map_or(*next, |head| head.base)
-                    } else {
-                        *next
-                    };
-                    builder.line_to(point(next.x, next.y));
-                }
+            if let [start, end] = points.as_slice() {
+                let radius = style.width * 0.5;
+                let start_roundness = marker.map_or_else(
+                    || {
+                        style
+                            .roundness
+                            .min((*end - *start).length() / style.width.max(f32::EPSILON))
+                    },
+                    |head| arrow_tail_roundness(head, style),
+                );
+                let start_center = inset_endpoint(*start, *end, radius * start_roundness);
+                let end_center = marker.map_or_else(
+                    || inset_endpoint(*end, *start, radius * start_roundness),
+                    |head| head.base,
+                );
+
+                builder.begin(point(start_center.x, start_center.y));
+                builder.line_to(point(end_center.x, end_center.y));
                 builder.end(false);
-            }
-            if let Some((start, end)) = path_endpoints(points) {
-                let cap_roundness = start_cap_roundness(marker, style);
-                caps.push((points[0], points[0] - points[1], cap_roundness));
+                caps.push((start_center, *start - *end, start_roundness));
                 if marker.is_none() {
-                    caps.push((end, end - start, style.roundness));
+                    caps.push((end_center, *end - *start, start_roundness));
                 }
-            } else if let Some(point) = points.first() {
-                caps.push((*point, Point::new(1.0, 0.0), style.roundness));
             }
         }
         ElementKind::Path { smooth: true, .. } => unreachable!(),
@@ -433,43 +436,31 @@ pub(super) fn rendered_path_endpoints(kind: &ElementKind, style: Style) -> Optio
     else {
         return None;
     };
-    let first = *points.first()?;
-    let second = *points.get(1)?;
-    let (penultimate, last) = path_endpoints(points)?;
-    let marker = matches!(end_marker, Some(EndMarker::Arrow))
-        .then(|| arrow_head(penultimate, last, style.width));
-    let start = cap_tip(
-        first,
-        first - second,
-        style.width * 0.5 * start_cap_roundness(marker, style),
-    );
-    let end = marker.map_or_else(
-        || {
-            cap_tip(
-                last,
-                last - penultimate,
-                style.width * 0.5 * style.roundness,
-            )
-        },
-        |head| head.rendered_tip(style.roundness),
-    );
-    Some([start, end])
-}
-
-fn start_cap_roundness(marker: Option<ArrowHead>, style: Style) -> f32 {
-    marker.map_or(style.roundness, |head| {
-        let progress = (head.shaft_length / (style.width * 0.5)).clamp(0.0, 1.0);
-        let smooth_progress = progress * progress * (3.0 - 2.0 * progress);
-        style.roundness * smooth_progress
-    })
-}
-
-fn cap_tip(center: Point, outward: Point, extension: f32) -> Point {
-    let length = outward.length();
-    if length <= f32::EPSILON {
-        center
+    let [first, last] = points.as_slice() else {
+        return None;
+    };
+    let end = if matches!(end_marker, Some(EndMarker::Arrow)) {
+        arrow_head(*first, *last, style.width).rendered_tip(style.roundness)
     } else {
-        center + outward * (extension / length)
+        *last
+    };
+    Some([*first, end])
+}
+
+fn arrow_tail_roundness(head: ArrowHead, style: Style) -> f32 {
+    let radius = style.width * 0.5;
+    let progress = (head.shaft_length / radius.max(f32::EPSILON)).clamp(0.0, 1.0);
+    let smooth_progress = progress * progress * (3.0 - 2.0 * progress);
+    (style.roundness * smooth_progress).min(progress)
+}
+
+fn inset_endpoint(endpoint: Point, neighbor: Point, amount: f32) -> Point {
+    let inward = neighbor - endpoint;
+    let length = inward.length();
+    if length <= f32::EPSILON {
+        endpoint
+    } else {
+        endpoint + inward * (amount / length)
     }
 }
 
