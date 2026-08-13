@@ -1,9 +1,10 @@
 use super::Modifiers;
-use super::scene::{ElementKind, Point, Style, tessellate};
+use super::scene::{Bounds, ElementKind, Point, Style, tessellate};
 use crate::render::Geometry;
 
 const SNAP_STEP: f32 = std::f32::consts::FRAC_PI_4;
-const HIT_RADIUS: f32 = 9.0;
+const ENDPOINT_HIT_RADIUS: f32 = 9.0;
+const OUTLINE_HIT_RADIUS: f32 = 5.0;
 const VISUAL_RADIUS: f32 = 3.5;
 const GAP: f32 = 4.0;
 const COLOR: [f32; 4] = [0.1, 0.75, 1.0, 0.8];
@@ -45,38 +46,28 @@ pub(super) enum Edge {
 
 pub(super) fn cursor(handle: Handle) -> CursorHint {
     match handle {
-        Handle::Corner(corner) => resize_cursor(match corner {
-            Corner::TopLeft => -3.0 * std::f32::consts::FRAC_PI_4,
-            Corner::TopRight => -std::f32::consts::FRAC_PI_4,
-            Corner::BottomRight => std::f32::consts::FRAC_PI_4,
-            Corner::BottomLeft => 3.0 * std::f32::consts::FRAC_PI_4,
-        }),
+        Handle::Corner(Corner::TopLeft | Corner::BottomRight) => CursorHint::NwseResize,
+        Handle::Corner(Corner::TopRight | Corner::BottomLeft) => CursorHint::NeswResize,
         Handle::Edge(Edge::Top | Edge::Bottom) => CursorHint::NsResize,
         Handle::Edge(Edge::Left | Edge::Right) => CursorHint::EwResize,
         Handle::Start | Handle::End => CursorHint::Move,
     }
 }
 
-fn resize_cursor(angle: f32) -> CursorHint {
-    match ((angle / std::f32::consts::FRAC_PI_4).round() as i32).rem_euclid(4) {
-        0 => CursorHint::EwResize,
-        1 => CursorHint::NwseResize,
-        2 => CursorHint::NsResize,
-        _ => CursorHint::NeswResize,
-    }
-}
-
-pub(super) fn hit_handle(kind: &ElementKind, point: Point) -> Option<Handle> {
-    handle_points(kind)
-        .into_iter()
-        .filter(|(_, center)| center.distance_squared(point) <= HIT_RADIUS.powi(2))
-        .min_by(|(_, first), (_, second)| {
-            first
-                .distance_squared(point)
-                .total_cmp(&second.distance_squared(point))
+pub(super) fn hit_handle(kind: &ElementKind, bounds: Bounds, point: Point) -> Option<Handle> {
+    endpoints(kind)
+        .and_then(|[start, end]| {
+            let radius_squared = ENDPOINT_HIT_RADIUS * ENDPOINT_HIT_RADIUS;
+            let start_distance = start.distance_squared(point);
+            let end_distance = end.distance_squared(point);
+            let (handle, distance) = if start_distance < end_distance {
+                (Handle::Start, start_distance)
+            } else {
+                (Handle::End, end_distance)
+            };
+            (distance <= radius_squared).then_some(handle)
         })
-        .map(|(handle, _)| handle)
-        .or_else(|| edge_handle(kind, point))
+        .or_else(|| outline_handle(kind, bounds, point))
 }
 
 pub(super) fn outline(min: Point, max: Point) -> Geometry {
@@ -94,14 +85,12 @@ pub(super) fn outline(min: Point, max: Point) -> Geometry {
 }
 
 pub(super) fn append_handles(kind: &ElementKind, output: &mut Vec<Geometry>) {
-    output.extend(
-        handle_points(kind)
-            .into_iter()
-            .map(|(handle, center)| handle_geometry(handle, center)),
-    );
+    if let Some(handles) = endpoints(kind) {
+        output.extend(handles.into_iter().map(endpoint_geometry));
+    }
 }
 
-fn handle_points(kind: &ElementKind) -> Vec<(Handle, Point)> {
+fn endpoints(kind: &ElementKind) -> Option<[Point; 2]> {
     if let ElementKind::Path {
         points,
         smooth: false,
@@ -109,91 +98,72 @@ fn handle_points(kind: &ElementKind) -> Vec<(Handle, Point)> {
     } = kind
         && points.len() >= 2
     {
-        return vec![
-            (Handle::Start, points[0]),
-            (Handle::End, *points.last().expect("non-empty path")),
-        ];
+        return Some([points[0], *points.last().expect("non-empty path")]);
     }
-    box_bounds(kind).map_or_else(Vec::new, |(min, max)| {
-        vec![
-            (Handle::Corner(Corner::TopLeft), min),
-            (Handle::Corner(Corner::TopRight), Point::new(max.x, min.y)),
-            (Handle::Corner(Corner::BottomRight), max),
-            (Handle::Corner(Corner::BottomLeft), Point::new(min.x, max.y)),
-        ]
-    })
+    None
 }
 
-fn box_bounds(kind: &ElementKind) -> Option<(Point, Point)> {
-    Some(match kind {
-        ElementKind::Rectangle { min, max } => (*min, *max),
-        ElementKind::Ellipse { center, radii } => (
-            Point::new(center.x - radii.x, center.y - radii.y),
-            Point::new(center.x + radii.x, center.y + radii.y),
-        ),
-        _ => return None,
-    })
+fn outline_handle(kind: &ElementKind, bounds: Bounds, point: Point) -> Option<Handle> {
+    if !matches!(
+        kind,
+        ElementKind::Rectangle { .. } | ElementKind::Ellipse { .. }
+    ) {
+        return None;
+    }
+    let min = Point::new(bounds.min.x - GAP, bounds.min.y - GAP);
+    let max = Point::new(bounds.max.x + GAP, bounds.max.y + GAP);
+    if point.x < min.x - OUTLINE_HIT_RADIUS
+        || point.x > max.x + OUTLINE_HIT_RADIUS
+        || point.y < min.y - OUTLINE_HIT_RADIUS
+        || point.y > max.y + OUTLINE_HIT_RADIUS
+    {
+        return None;
+    }
+
+    let left = (point.x - min.x).abs();
+    let right = (point.x - max.x).abs();
+    let x_edge = (left.min(right) <= OUTLINE_HIT_RADIUS).then_some(if left < right {
+        Edge::Left
+    } else {
+        Edge::Right
+    });
+    let top = (point.y - min.y).abs();
+    let bottom = (point.y - max.y).abs();
+    let y_edge = (top.min(bottom) <= OUTLINE_HIT_RADIUS).then_some(if top < bottom {
+        Edge::Top
+    } else {
+        Edge::Bottom
+    });
+
+    match (x_edge, y_edge) {
+        (Some(Edge::Left), Some(Edge::Top)) => Some(Handle::Corner(Corner::TopLeft)),
+        (Some(Edge::Right), Some(Edge::Top)) => Some(Handle::Corner(Corner::TopRight)),
+        (Some(Edge::Right), Some(Edge::Bottom)) => Some(Handle::Corner(Corner::BottomRight)),
+        (Some(Edge::Left), Some(Edge::Bottom)) => Some(Handle::Corner(Corner::BottomLeft)),
+        (Some(edge), None) | (None, Some(edge)) => Some(Handle::Edge(edge)),
+        _ => None,
+    }
 }
 
-fn edge_handle(kind: &ElementKind, point: Point) -> Option<Handle> {
-    let (min, max) = box_bounds(kind)?;
-    [
-        (Edge::Top, (point.y - min.y).abs(), point.x, min.x, max.x),
-        (Edge::Right, (point.x - max.x).abs(), point.y, min.y, max.y),
-        (Edge::Bottom, (point.y - max.y).abs(), point.x, min.x, max.x),
-        (Edge::Left, (point.x - min.x).abs(), point.y, min.y, max.y),
-    ]
-    .into_iter()
-    .filter(|(_, distance, along, start, end)| {
-        *distance <= HIT_RADIUS && *along >= *start && *along <= *end
-    })
-    .min_by(|(_, first, ..), (_, second, ..)| first.total_cmp(second))
-    .map(|(edge, ..)| Handle::Edge(edge))
-}
-
-fn handle_geometry(handle: Handle, center: Point) -> Geometry {
+fn endpoint_geometry(center: Point) -> Geometry {
     let style = Style {
         width: 1.5,
         color: COLOR,
         roundness: 0.0,
     };
-    match handle {
-        Handle::Start | Handle::End => tessellate(
-            &ElementKind::Ellipse {
-                center,
-                radii: Point::new(VISUAL_RADIUS, VISUAL_RADIUS),
-            },
-            style,
-        ),
-        Handle::Corner(corner) => {
-            let inside = match corner {
-                Corner::TopLeft => Point::new(1.0, 1.0),
-                Corner::TopRight => Point::new(-1.0, 1.0),
-                Corner::BottomRight => Point::new(-1.0, -1.0),
-                Corner::BottomLeft => Point::new(1.0, -1.0),
-            };
-            let pivot = center - inside * GAP;
-            tessellate(
-                &ElementKind::Path {
-                    points: vec![
-                        Point::new(pivot.x + inside.x * 6.0, pivot.y),
-                        pivot,
-                        Point::new(pivot.x, pivot.y + inside.y * 6.0),
-                    ],
-                    smooth: false,
-                    end_marker: None,
-                },
-                style,
-            )
-        }
-        Handle::Edge(_) => Geometry::empty(),
-    }
+    tessellate(
+        &ElementKind::Ellipse {
+            center,
+            radii: Point::new(VISUAL_RADIUS, VISUAL_RADIUS),
+        },
+        style,
+    )
 }
 
 pub(super) fn resize(
     original: &ElementKind,
     handle: Handle,
-    point: Point,
+    delta: Point,
     modifiers: Modifiers,
 ) -> ElementKind {
     match (original, handle) {
@@ -210,14 +180,15 @@ pub(super) fn resize(
                 Handle::Start => {
                     points[0] = constrained_endpoint(
                         *points.last().expect("non-empty path"),
-                        point,
+                        points[0] + delta,
                         modifiers.shift,
                     );
                 }
                 Handle::End => {
                     let start = points[0];
+                    let end = *points.last().expect("non-empty path") + delta;
                     *points.last_mut().expect("non-empty path") =
-                        constrained_endpoint(start, point, modifiers.shift);
+                        constrained_endpoint(start, end, modifiers.shift);
                 }
                 _ => unreachable!(),
             }
@@ -228,7 +199,7 @@ pub(super) fn resize(
             }
         }
         (ElementKind::Rectangle { min, max }, handle @ (Handle::Corner(_) | Handle::Edge(_))) => {
-            let (min, max) = resized_box(*min, *max, handle, point, modifiers);
+            let (min, max) = resized_box(*min, *max, handle, delta, modifiers);
             ElementKind::Rectangle { min, max }
         }
         (
@@ -237,7 +208,7 @@ pub(super) fn resize(
         ) => {
             let min = Point::new(center.x - radii.x, center.y - radii.y);
             let max = Point::new(center.x + radii.x, center.y + radii.y);
-            let (min, max) = resized_box(min, max, handle, point, modifiers);
+            let (min, max) = resized_box(min, max, handle, delta, modifiers);
             ElementKind::Ellipse {
                 center: min.midpoint(max),
                 radii: Point::new((max.x - min.x) * 0.5, (max.y - min.y) * 0.5),
@@ -251,10 +222,11 @@ fn resized_box(
     original_min: Point,
     original_max: Point,
     handle: Handle,
-    point: Point,
+    delta: Point,
     modifiers: Modifiers,
 ) -> (Point, Point) {
     let center = original_min.midpoint(original_max);
+    let point = handle_position(original_min, original_max, handle) + delta;
     if let Handle::Corner(corner) = handle {
         let anchor = if modifiers.alt {
             center
@@ -299,6 +271,20 @@ fn resized_box(
         }
     }
     (min, max)
+}
+
+fn handle_position(min: Point, max: Point, handle: Handle) -> Point {
+    match handle {
+        Handle::Corner(Corner::TopLeft) => min,
+        Handle::Corner(Corner::TopRight) => Point::new(max.x, min.y),
+        Handle::Corner(Corner::BottomRight) => max,
+        Handle::Corner(Corner::BottomLeft) => Point::new(min.x, max.y),
+        Handle::Edge(Edge::Top) => Point::new((min.x + max.x) * 0.5, min.y),
+        Handle::Edge(Edge::Right) => Point::new(max.x, (min.y + max.y) * 0.5),
+        Handle::Edge(Edge::Bottom) => Point::new((min.x + max.x) * 0.5, max.y),
+        Handle::Edge(Edge::Left) => Point::new(min.x, (min.y + max.y) * 0.5),
+        Handle::Start | Handle::End => unreachable!(),
+    }
 }
 
 fn opposite_corner(min: Point, max: Point, corner: Corner) -> Point {

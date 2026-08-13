@@ -76,6 +76,7 @@ enum Interaction {
     Resizing {
         id: ElementId,
         handle: Handle,
+        start: Point,
         original: ElementKind,
         current: ElementKind,
     },
@@ -403,6 +404,7 @@ impl Editor {
                     self.interaction = Some(Interaction::Resizing {
                         id,
                         handle,
+                        start: point,
                         current: original.clone(),
                         original,
                     });
@@ -484,13 +486,15 @@ impl Editor {
             Some(Interaction::Resizing {
                 id,
                 handle,
+                start,
                 original,
                 ..
             }) => {
-                let current = selection::resize(&original, handle, point, modifiers);
+                let current = selection::resize(&original, handle, point - start, modifiers);
                 self.interaction = Some(Interaction::Resizing {
                     id,
                     handle,
+                    start,
                     original,
                     current,
                 });
@@ -556,10 +560,11 @@ impl Editor {
             Some(Interaction::Resizing {
                 id,
                 handle,
+                start,
                 original,
                 ..
             }) => {
-                let current = selection::resize(&original, handle, point, modifiers);
+                let current = selection::resize(&original, handle, point - start, modifiers);
                 if current != original
                     && let Some(element) = self.element_mut(id)
                 {
@@ -981,7 +986,7 @@ impl Editor {
 
     fn hit_handle(&self, id: ElementId, point: Point) -> Option<Handle> {
         let element = self.element(id)?;
-        selection::hit_handle(&element.kind, point)
+        selection::hit_handle(&element.kind, element.bounds, point)
     }
 
     pub fn cursor_hint(&self, point: Point) -> selection::CursorHint {
