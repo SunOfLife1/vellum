@@ -747,7 +747,7 @@ impl Editor {
         if !show_handles {
             return;
         }
-        selection::append_handles(kind, output);
+        selection::append_handles(kind, element.style, output);
     }
 
     pub fn picker_geometry(&self) -> Option<Geometry> {
@@ -981,7 +981,7 @@ impl Editor {
 
     fn hit_handle(&self, id: ElementId, point: Point) -> Option<Handle> {
         let element = self.element(id)?;
-        selection::hit_handle(&element.kind, element.bounds, point)
+        selection::hit_handle(&element.kind, element.style, element.bounds, point)
     }
 
     pub fn cursor_hint(&self, point: Point) -> selection::CursorHint {

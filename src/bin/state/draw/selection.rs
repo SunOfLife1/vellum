@@ -1,13 +1,15 @@
 use super::Modifiers;
-use super::scene::{Bounds, ElementKind, Point, Style, tessellate};
-use crate::render::Geometry;
+use super::scene::{Bounds, ElementKind, Point, Style, rendered_path_endpoints, tessellate};
+use crate::render::{Geometry, Vertex};
 
 const SNAP_STEP: f32 = std::f32::consts::FRAC_PI_4;
 const ENDPOINT_HIT_RADIUS: f32 = 9.0;
 const OUTLINE_HIT_RADIUS: f32 = 5.0;
-const VISUAL_RADIUS: f32 = 3.5;
+const VISUAL_RADIUS: f32 = 4.5;
+const SELECTION_WIDTH: f32 = 1.5;
 const GAP: f32 = 4.0;
 const COLOR: [f32; 4] = [0.1, 0.75, 1.0, 0.8];
+const HANDLE_FILL: [f32; 4] = [0.04, 0.04, 0.04, 1.0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Handle {
@@ -50,12 +52,17 @@ pub(super) fn cursor(handle: Handle) -> CursorHint {
         Handle::Corner(Corner::TopRight | Corner::BottomLeft) => CursorHint::NeswResize,
         Handle::Edge(Edge::Top | Edge::Bottom) => CursorHint::NsResize,
         Handle::Edge(Edge::Left | Edge::Right) => CursorHint::EwResize,
-        Handle::Start | Handle::End => CursorHint::Move,
+        Handle::Start | Handle::End => CursorHint::Crosshair,
     }
 }
 
-pub(super) fn hit_handle(kind: &ElementKind, bounds: Bounds, point: Point) -> Option<Handle> {
-    endpoints(kind)
+pub(super) fn hit_handle(
+    kind: &ElementKind,
+    style: Style,
+    bounds: Bounds,
+    point: Point,
+) -> Option<Handle> {
+    rendered_path_endpoints(kind, style)
         .and_then(|[start, end]| {
             let radius_squared = ENDPOINT_HIT_RADIUS * ENDPOINT_HIT_RADIUS;
             let start_distance = start.distance_squared(point);
@@ -77,30 +84,19 @@ pub(super) fn outline(min: Point, max: Point) -> Geometry {
             max: Point::new(max.x + GAP, max.y + GAP),
         },
         Style {
-            width: 1.5,
+            width: SELECTION_WIDTH,
             color: COLOR,
             roundness: 0.0,
         },
     )
 }
 
-pub(super) fn append_handles(kind: &ElementKind, output: &mut Vec<Geometry>) {
-    if let Some(handles) = endpoints(kind) {
-        output.extend(handles.into_iter().map(endpoint_geometry));
+pub(super) fn append_handles(kind: &ElementKind, style: Style, output: &mut Vec<Geometry>) {
+    if let Some([start, end]) = rendered_path_endpoints(kind, style) {
+        let start_geometry = endpoint_geometry(start);
+        let end_geometry = start_geometry.translated([end.x - start.x, end.y - start.y]);
+        output.extend([start_geometry, end_geometry]);
     }
-}
-
-fn endpoints(kind: &ElementKind) -> Option<[Point; 2]> {
-    if let ElementKind::Path {
-        points,
-        smooth: false,
-        ..
-    } = kind
-        && points.len() >= 2
-    {
-        return Some([points[0], *points.last().expect("non-empty path")]);
-    }
-    None
 }
 
 fn outline_handle(kind: &ElementKind, bounds: Bounds, point: Point) -> Option<Handle> {
@@ -146,18 +142,38 @@ fn outline_handle(kind: &ElementKind, bounds: Bounds, point: Point) -> Option<Ha
 }
 
 fn endpoint_geometry(center: Point) -> Geometry {
-    let style = Style {
-        width: 1.5,
-        color: COLOR,
-        roundness: 0.0,
-    };
-    tessellate(
+    const SEGMENTS: u32 = 16;
+    let mut buffers = lyon_tessellation::VertexBuffers::new();
+    buffers
+        .vertices
+        .push(Vertex::at([center.x, center.y], HANDLE_FILL));
+    for index in 0..=SEGMENTS {
+        let angle = std::f32::consts::TAU * index as f32 / SEGMENTS as f32;
+        buffers.vertices.push(Vertex::at(
+            [
+                center.x + VISUAL_RADIUS * angle.cos(),
+                center.y + VISUAL_RADIUS * angle.sin(),
+            ],
+            HANDLE_FILL,
+        ));
+    }
+    for index in 0..SEGMENTS {
+        buffers.indices.extend([0, index + 1, index + 2]);
+    }
+    let mut geometry = Geometry::new(buffers);
+    let radius = VISUAL_RADIUS - SELECTION_WIDTH * 0.5;
+    geometry.append(tessellate(
         &ElementKind::Ellipse {
             center,
-            radii: Point::new(VISUAL_RADIUS, VISUAL_RADIUS),
+            radii: Point::new(radius, radius),
         },
-        style,
-    )
+        Style {
+            width: SELECTION_WIDTH,
+            color: COLOR,
+            roundness: 0.0,
+        },
+    ));
+    geometry
 }
 
 pub(super) fn resize(

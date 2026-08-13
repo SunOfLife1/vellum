@@ -368,11 +368,7 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
                 builder.end(false);
             }
             if let Some((start, end)) = path_endpoints(points) {
-                let cap_roundness = marker.map_or(style.roundness, |head| {
-                    let progress = (head.shaft_length / (style.width * 0.5)).clamp(0.0, 1.0);
-                    let smooth_progress = progress * progress * (3.0 - 2.0 * progress);
-                    style.roundness * smooth_progress
-                });
+                let cap_roundness = start_cap_roundness(marker, style);
                 caps.push((points[0], points[0] - points[1], cap_roundness));
                 if marker.is_none() {
                     caps.push((end, end - start, style.roundness));
@@ -426,6 +422,55 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
         ));
     }
     geometry
+}
+
+pub(super) fn rendered_path_endpoints(kind: &ElementKind, style: Style) -> Option<[Point; 2]> {
+    let ElementKind::Path {
+        points,
+        smooth: false,
+        end_marker,
+    } = kind
+    else {
+        return None;
+    };
+    let first = *points.first()?;
+    let second = *points.get(1)?;
+    let (penultimate, last) = path_endpoints(points)?;
+    let marker = matches!(end_marker, Some(EndMarker::Arrow))
+        .then(|| arrow_head(penultimate, last, style.width));
+    let start = cap_tip(
+        first,
+        first - second,
+        style.width * 0.5 * start_cap_roundness(marker, style),
+    );
+    let end = marker.map_or_else(
+        || {
+            cap_tip(
+                last,
+                last - penultimate,
+                style.width * 0.5 * style.roundness,
+            )
+        },
+        |head| head.rendered_tip(style.roundness),
+    );
+    Some([start, end])
+}
+
+fn start_cap_roundness(marker: Option<ArrowHead>, style: Style) -> f32 {
+    marker.map_or(style.roundness, |head| {
+        let progress = (head.shaft_length / (style.width * 0.5)).clamp(0.0, 1.0);
+        let smooth_progress = progress * progress * (3.0 - 2.0 * progress);
+        style.roundness * smooth_progress
+    })
+}
+
+fn cap_tip(center: Point, outward: Point, extension: f32) -> Point {
+    let length = outward.length();
+    if length <= f32::EPSILON {
+        center
+    } else {
+        center + outward * (extension / length)
+    }
 }
 
 fn rectangle_radius(min: Point, max: Point, roundness: f32) -> f32 {
@@ -532,6 +577,12 @@ struct ArrowHead {
     vertices: [Point; 3],
     base: Point,
     shaft_length: f32,
+}
+
+impl ArrowHead {
+    fn rendered_tip(self, roundness: f32) -> Point {
+        self.vertices[0] + (self.base - self.vertices[0]) * (POLYGON_CORNER_INSET * roundness * 0.5)
+    }
 }
 
 fn arrow_head(start: Point, end: Point, width: f32) -> ArrowHead {
