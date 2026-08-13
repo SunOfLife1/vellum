@@ -1,15 +1,14 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Wrap,
+    Attrs, Buffer, Cache, Color, Cursor, Edit, Editor, Family, FontSystem, Metrics, Resolution,
+    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Wrap,
 };
 
 pub struct TextSpec<'a> {
     pub key: u64,
-    pub content: Cow<'a, str>,
+    pub content: &'a str,
     pub left: f32,
     pub top: f32,
     pub size: f32,
@@ -98,7 +97,7 @@ impl TextState {
                 buffer.set_size(&mut self.font_system, None, Some(spec.size * 1.25));
                 buffer.set_text(
                     &mut self.font_system,
-                    &spec.content,
+                    spec.content,
                     &Attrs::new().family(Family::SansSerif),
                     Shaping::Advanced,
                     None,
@@ -110,7 +109,7 @@ impl TextState {
                 self.buffers.insert(
                     spec.key,
                     CachedText {
-                        content: spec.content.as_ref().to_owned(),
+                        content: spec.content.to_owned(),
                         size: spec.size,
                         layout_size: [layout_width, spec.size * 1.25],
                         buffer,
@@ -151,6 +150,13 @@ impl TextState {
 
     pub(super) fn layout_size(&self, key: u64) -> Option<[f32; 2]> {
         self.buffers.get(&key).map(|cached| cached.layout_size)
+    }
+
+    pub(super) fn cursor_x(&mut self, key: u64, index: usize) -> Option<f32> {
+        let cached = self.buffers.get_mut(&key)?;
+        let mut editor = Editor::new(&mut cached.buffer);
+        editor.set_cursor(Cursor::new(0, index));
+        editor.cursor_position().map(|(x, _)| x as f32)
     }
 
     pub(super) fn render<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {

@@ -276,6 +276,7 @@ impl State {
     }
 
     pub fn deactivate(&mut self) {
+        self.keyboard.cancel_repeat();
         let preview_changed = self.draw.deactivate();
         let empty_region = self.wayland.compositor.create_region(&self.qhandle, ());
         self.wayland
@@ -455,11 +456,20 @@ impl State {
     }
 
     pub fn next_wakeup(&self) -> Option<std::time::Instant> {
-        self.draw.next_wakeup()
+        [self.draw.next_wakeup(), self.keyboard.next_wakeup()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     pub fn handle_timeouts(&mut self, now: std::time::Instant) {
-        if self.draw.expire_feedback(now) {
+        if let Some(action) = self
+            .keyboard
+            .repeat_action(now, self.draw.is_editing_text())
+        {
+            self.apply_action(action);
+        }
+        if self.draw.handle_timeouts(now) {
             self.request_render();
         }
     }
@@ -531,9 +541,11 @@ impl Dispatch<WlSeat, ()> for State {
             state.wayland.keyboard = Some(seat.get_keyboard(qhandle, ()));
         } else if !capabilities.contains(Capability::Keyboard)
             && let Some(keyboard) = state.wayland.keyboard.take()
-            && keyboard.version() >= 3
         {
-            keyboard.release();
+            state.keyboard.clear();
+            if keyboard.version() >= 3 {
+                keyboard.release();
+            }
         }
     }
 }

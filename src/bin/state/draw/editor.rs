@@ -15,7 +15,7 @@ const MAX_STROKE_WIDTH: f32 = 64.0;
 const MIN_OPACITY: f32 = 0.05;
 const MIN_FONT_SIZE: f32 = 8.0;
 const MAX_FONT_SIZE: f32 = 192.0;
-const DEFAULT_TEXT_SIZE: f32 = 25.0;
+const DEFAULT_TEXT_SIZE: f32 = 20.0;
 const PROPERTY_COUNT: usize = 6;
 const TEXT_SLOT: usize = PROPERTY_COUNT - 1;
 
@@ -53,6 +53,7 @@ pub(crate) enum Action {
     Cancel,
     CommitText,
     Backspace,
+    BackspaceWord,
     MoveCursor(CursorMove),
     InsertText(String),
 }
@@ -329,10 +330,14 @@ impl Editor {
                     effect.damage = Damage::from_preview(edit.backspace());
                 }
             }
+            Action::BackspaceWord => {
+                if let Some(edit) = self.text_edit_mut() {
+                    effect.damage = Damage::from_preview(edit.backspace_word());
+                }
+            }
             Action::MoveCursor(movement) => {
                 if let Some(edit) = self.text_edit_mut() {
-                    edit.move_cursor(movement);
-                    effect.damage = Damage::Preview;
+                    effect.damage = Damage::from_preview(edit.move_cursor(movement));
                 }
             }
             Action::InsertText(text) => {

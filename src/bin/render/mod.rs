@@ -482,6 +482,10 @@ impl WgpuState {
         self.text.as_ref()?.layout_size(key)
     }
 
+    pub fn text_cursor_x(&mut self, key: u64, index: usize) -> Option<f32> {
+        self.text.as_mut()?.cursor_x(key, index)
+    }
+
     pub fn render(&mut self, previews: &[Geometry], overlays: &[Geometry]) -> bool {
         let preview_index_count = previews
             .iter()
