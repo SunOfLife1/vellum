@@ -22,7 +22,7 @@ const CONFIG_FILE: &str = "vellum/config.toml";
 pub(crate) type Rgb = [f32; 3];
 
 const DEFAULT_PALETTE: [&str; 8] = [
-    "#FF0000", "#FFFF00", "#00FF00", "#00FFFF", "#0000FF", "#FF00FF", "#FFFFFF", "#000000",
+    "#E84046", "#EC8948", "#EED049", "#3ED73C", "#0283FC", "#7C57EB", "#FFFFFF", "#000000",
 ];
 
 #[derive(Debug, Default, serde::Deserialize)]
