@@ -9,34 +9,17 @@ use clap::Parser;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use wayland_client::backend::WaylandError;
 
+mod cli;
 mod protocol;
 mod render;
 mod state;
 
-use protocol::{CONTROL_SOCKET, Command, Rgb, parse_color, valid_width};
+use cli::{Backend, Cli, Command};
+use protocol::CONTROL_SOCKET;
 
 const MAX_SOCKET_MESSAGE: usize = 4096;
 const CONFIG_FILE: &str = "vellum/config.toml";
-
-#[derive(clap_derive::Parser)]
-#[command(version, about, long_about = None)]
-#[command(args_conflicts_with_subcommands = true)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
-
-    /// Read this TOML preferences file
-    #[arg(long, conflicts_with = "no_config")]
-    config: Option<PathBuf>,
-
-    /// Ignore preferences files
-    #[arg(long)]
-    no_config: bool,
-
-    /// Force the rendering backend
-    #[arg(short = 'b', long, value_name = "BACKEND")]
-    force_backend: Option<render::Backend>,
-}
+pub(crate) type Rgb = [f32; 3];
 
 const DEFAULT_PALETTE: [&str; 8] = [
     "#FF0000", "#FFFF00", "#00FF00", "#00FFFF", "#0000FF", "#FF00FF", "#FFFFFF", "#000000",
@@ -56,7 +39,7 @@ struct FileConfig {
 struct Settings {
     stroke_width: f32,
     stroke_color: Rgb,
-    force_backend: Option<render::Backend>,
+    force_backend: Option<Backend>,
     default_tool: state::Tool,
     remember_last_tool: bool,
     palette: Vec<Rgb>,
@@ -118,6 +101,23 @@ impl Settings {
 
 fn parse_named_color(name: &str, value: &str) -> Result<Rgb, String> {
     parse_color(value).map_err(|error| format!("invalid {name} {value:?}: {error}"))
+}
+
+fn valid_width(width: f32) -> bool {
+    width.is_finite() && width > 0.0
+}
+
+fn parse_color(value: &str) -> Result<Rgb, &'static str> {
+    let hex = value.strip_prefix('#').ok_or("color must start with #")?;
+    if hex.len() != 6 {
+        return Err("color must be #RRGGBB");
+    }
+    let value = u32::from_str_radix(hex, 16).map_err(|_| "color contains a non-hex digit")?;
+    Ok([
+        ((value >> 16) & 0xff) as f32 / 255.0,
+        ((value >> 8) & 0xff) as f32 / 255.0,
+        (value & 0xff) as f32 / 255.0,
+    ])
 }
 
 fn read_config(path: &Path) -> Result<FileConfig, String> {

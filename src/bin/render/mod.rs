@@ -5,6 +5,7 @@ use text::TextState;
 use vertex::Uniform;
 pub use vertex::Vertex;
 
+use crate::cli::Backend;
 use lyon_tessellation::VertexBuffers;
 use wayland_client::Proxy;
 use wayland_client::protocol::wl_display::WlDisplay;
@@ -13,24 +14,6 @@ use wgpu::util::DeviceExt;
 
 const INITIAL_BUFFER_SIZE: u64 = 4096;
 const RENDER_SCALE: u32 = 2;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Backend {
-    Vulkan,
-    OpenGL,
-}
-
-impl std::str::FromStr for Backend {
-    type Err = &'static str;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "vulkan" => Ok(Self::Vulkan),
-            "opengl" | "gl" => Ok(Self::OpenGL),
-            _ => Err("backend must be vulkan or opengl"),
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct Geometry {

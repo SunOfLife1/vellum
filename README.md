@@ -43,7 +43,8 @@ Mod+A { spawn "vellum" "toggle"; }
 Drag selection handles to reshape supported elements. While drawing, `Shift` constrains geometry
 and `Alt` draws rectangles and ellipses from their center.
 
-Run `vellum --help` for startup options and socket commands.
+Run `vellum --help` for startup options and commands. Packaged releases also provide
+`man vellum` with the same command-line reference.
 
 ## Configuration
 

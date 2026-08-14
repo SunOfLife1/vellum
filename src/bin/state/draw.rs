@@ -42,10 +42,10 @@ pub struct DrawState {
 impl DrawState {
     pub fn new(
         stroke_width: f32,
-        stroke_color: crate::protocol::Rgb,
+        stroke_color: crate::Rgb,
         default_tool: Tool,
         remember_last_tool: bool,
-        palette: Vec<crate::protocol::Rgb>,
+        palette: Vec<crate::Rgb>,
         feedback_duration: Duration,
     ) -> Self {
         Self {

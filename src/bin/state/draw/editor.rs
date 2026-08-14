@@ -142,10 +142,10 @@ pub struct Editor {
 impl Editor {
     pub fn new(
         width: f32,
-        rgb: crate::protocol::Rgb,
+        rgb: crate::Rgb,
         default_tool: Tool,
         remember_last_tool: bool,
-        palette: Vec<crate::protocol::Rgb>,
+        palette: Vec<crate::Rgb>,
     ) -> Self {
         let width = width.clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
         let text_size = DEFAULT_TEXT_SIZE;

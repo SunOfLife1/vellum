@@ -15,6 +15,7 @@
     fileset = lib.fileset.unions [
       ../Cargo.toml
       ../Cargo.lock
+      ../build.rs
       ../src
     ];
   };
@@ -43,5 +44,9 @@ in
     postInstall = ''
       wrapProgram $out/bin/vellum \
         --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [libGL vulkan-loader]}
+
+      man_dir=$(find target -type d -path '*/build/vellum-*/out/man' -print -quit)
+      mkdir -p "$out/share/man/man1"
+      install -m644 "$man_dir"/*.1 "$out/share/man/man1/"
     '';
   }

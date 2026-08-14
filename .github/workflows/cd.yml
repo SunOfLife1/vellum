@@ -39,8 +39,10 @@ jobs:
           cargo build --locked --release --target "${{ matrix.target }}"
       - name: Package
         run: |
-          mkdir "$PACKAGE"
+          mkdir -p "$PACKAGE/share/man/man1"
           cp README.md LICENSE "target/${{ matrix.target }}/release/vellum" "$PACKAGE"
+          man_dir=$(find "target/${{ matrix.target }}/release/build" -type d -path '*/vellum-*/out/man' -print -quit)
+          cp "$man_dir"/*.1 "$PACKAGE/share/man/man1"
           tar -czf "$PACKAGE.tar.gz" "$PACKAGE"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

@@ -35,7 +35,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     KeyboardInteractivity, ZwlrLayerSurfaceV1,
 };
 
-use crate::render::Backend;
+use crate::cli::Backend;
 use crate::render::WgpuState;
 use draw::{Action, Modifiers, Point};
 
