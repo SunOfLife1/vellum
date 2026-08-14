@@ -27,26 +27,14 @@ struct Cli {
 
     /// Read this TOML preferences file
     #[arg(long, conflicts_with = "no_config")]
-    config: Option<std::path::PathBuf>,
+    config: Option<PathBuf>,
 
     /// Ignore preferences files
     #[arg(long)]
     no_config: bool,
 
-    /// Set the initial stroke width
-    #[arg(short = 'w', long)]
-    stroke_width: Option<f32>,
-
-    /// Set the initial #RRGGBB color
-    #[arg(short = 'c', long)]
-    stroke_color: Option<String>,
-
-    /// Set the initial tool
-    #[arg(long)]
-    default_tool: Option<String>,
-
-    /// Use vulkan or opengl
-    #[arg(short = 'b', long)]
+    /// Force the rendering backend
+    #[arg(short = 'b', long, value_name = "BACKEND")]
     force_backend: Option<render::Backend>,
 }
 
@@ -85,22 +73,18 @@ impl Settings {
             read_first_config(default_config_paths())?
         };
 
-        let stroke_width = cli.stroke_width.or(file.stroke_width).unwrap_or(5.0);
+        let stroke_width = file.stroke_width.unwrap_or(5.0);
         if !valid_width(stroke_width) {
             return Err("stroke_width must be a positive finite number".into());
         }
 
-        let default_tool = cli
+        let default_tool = file
             .default_tool
-            .or(file.default_tool)
             .unwrap_or_else(|| "pen".into())
             .to_ascii_lowercase()
             .parse()?;
 
-        let color_text = cli
-            .stroke_color
-            .or(file.default_color)
-            .unwrap_or_else(|| "#FF0000".into());
+        let color_text = file.default_color.unwrap_or_else(|| "#FF0000".into());
         let stroke_color = parse_named_color("default_color", &color_text)?;
 
         let palette_text = file
@@ -223,7 +207,7 @@ fn send_command(command: &Command) -> Result<(), String> {
         .connect_addr(&socket_addr)
         .map_err(|error| format!("could not connect to the overlay: {error}"))?;
     socket
-        .send(command.serialize().as_bytes())
+        .send(command.serialize())
         .map_err(|error| format!("could not send command: {error}"))?;
     Ok(())
 }
@@ -332,15 +316,6 @@ fn run_overlay(settings: Settings) {
                 };
                 match command {
                     Command::Toggle => state.toggle_input(),
-                    Command::Undo => state.undo(),
-                    Command::Redo => state.redo(),
-                    Command::Clear => state.clear(),
-                    Command::ClearAndDeactivate => {
-                        state.clear();
-                        state.deactivate();
-                    }
-                    Command::StrokeWidth { width } => state.set_stroke_width(width),
-                    Command::StrokeColor { color } => state.set_stroke_color(color),
                     Command::Exit => break 'running,
                 }
             }

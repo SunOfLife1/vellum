@@ -93,16 +93,6 @@ impl DrawState {
         self.editor.is_drawing_pen()
     }
 
-    pub fn set_stroke_width(&mut self, width: f32) -> bool {
-        let damage = self.editor.set_width(width);
-        self.record(damage)
-    }
-
-    pub fn set_stroke_color(&mut self, color: crate::protocol::Rgb) -> bool {
-        let damage = self.editor.set_color(color);
-        self.record(damage)
-    }
-
     pub fn handle_action(&mut self, action: Action) -> EditorEffect {
         let mut effect = self.editor.handle_action(action);
         if self.editor.is_editing_text() {

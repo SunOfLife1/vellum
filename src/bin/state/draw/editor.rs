@@ -49,7 +49,6 @@ pub(crate) enum Action {
     Redo,
     SelectAll,
     Delete,
-    Clear,
     Cancel,
     CommitText,
     Backspace,
@@ -272,30 +271,6 @@ impl Editor {
         self.picker.is_some()
     }
 
-    pub fn set_width(&mut self, width: f32) -> Damage {
-        let width = width.clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
-        for properties in &mut self.tool_properties[..TEXT_SLOT] {
-            properties.size = width;
-        }
-        let changed = self.tool != Tool::Text
-            && self.tool.properties().is_some()
-            && self.style.width != width;
-        if changed {
-            self.style.width = width;
-        }
-        Damage::from_preview(changed)
-    }
-
-    pub fn set_color(&mut self, rgb: crate::protocol::Rgb) -> Damage {
-        self.style.color[..3].copy_from_slice(&rgb);
-        let Some(edit) = self.text_edit_mut() else {
-            return Damage::None;
-        };
-        let changed = edit.style.color[..3] != rgb;
-        edit.style.color[..3].copy_from_slice(&rgb);
-        Damage::from_preview(changed)
-    }
-
     pub fn handle_action(&mut self, action: Action) -> EditorEffect {
         let mut effect = EditorEffect::default();
         let closed_picker = self.picker.take().is_some();
@@ -314,7 +289,6 @@ impl Editor {
                     effect.damage = self.delete_selection();
                 }
             }
-            Action::Clear => effect.damage = self.clear(),
             Action::Cancel => {
                 let cancelled = self.cancel_interaction();
                 if cancelled.changed() || !std::mem::take(&mut self.selected).is_empty() {
@@ -1049,17 +1023,6 @@ impl Editor {
         }
         self.selected = selected;
         damage.max(Damage::Preview)
-    }
-
-    pub fn clear(&mut self) -> Damage {
-        let cancelled = self.cancel_interaction();
-        if self.elements.is_empty() {
-            return cancelled;
-        }
-        let elements = std::mem::take(&mut self.elements);
-        self.history.record(HistoryEntry::Clear(elements));
-        self.selected.clear();
-        Damage::Scene
     }
 
     fn delete_selection(&mut self) -> Damage {

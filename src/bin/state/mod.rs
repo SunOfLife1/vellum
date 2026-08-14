@@ -293,30 +293,6 @@ impl State {
         }
     }
 
-    pub fn undo(&mut self) {
-        self.apply_action(Action::Undo);
-    }
-
-    pub fn redo(&mut self) {
-        self.apply_action(Action::Redo);
-    }
-
-    pub fn clear(&mut self) {
-        self.apply_action(Action::Clear);
-    }
-
-    pub fn set_stroke_width(&mut self, width: f32) {
-        if self.draw.set_stroke_width(width) {
-            self.request_render();
-        }
-    }
-
-    pub fn set_stroke_color(&mut self, color: crate::protocol::Rgb) {
-        if self.draw.set_stroke_color(color) {
-            self.request_render();
-        }
-    }
-
     fn render(&mut self) {
         if let Some(wgpu) = &mut self.wgpu {
             self.draw.render(wgpu);
