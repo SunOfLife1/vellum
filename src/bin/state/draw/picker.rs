@@ -6,8 +6,12 @@ const INNER_RADIUS: f32 = 30.0;
 const OUTER_RADIUS: f32 = 88.0;
 const WHEEL_BORDER_WIDTH: f32 = 3.0;
 const HOVER_EXTENSION: f32 = 6.0;
-const PREVIEW_BORDER_WIDTH: f32 = 2.0;
+const PREVIEW_BORDER_WIDTH: f32 = 1.0;
 const SEPARATOR_HALF_WIDTH: f32 = 2.0;
+
+const GAP_LINE_COLOR: [f32; 4] = [0.03, 0.03, 0.03, 1.0];
+const HOVER_COLOR: [f32; 4] = rgb_to_f32(2, 131, 252, 0.98);
+const ACTIVE_COLOR: [f32; 4] = rgb_to_f32(55, 100, 138, 0.95);
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Picker {
@@ -89,7 +93,7 @@ fn push_color_preview(
     color: [f32; 4],
 ) {
     let radius = INNER_RADIUS - WHEEL_BORDER_WIDTH;
-    push_disc(buffers, center, radius, [0.8, 0.8, 0.8, 1.0]);
+    push_disc(buffers, center, radius, GAP_LINE_COLOR);
     push_disc(
         buffers,
         center,
@@ -150,7 +154,7 @@ pub(super) fn palette_geometry(
             outer + WHEEL_BORDER_WIDTH,
             start..end,
             0.0,
-            [0.04, 0.04, 0.04, 0.94],
+            GAP_LINE_COLOR,
         );
         push_wedge(
             &mut buffers,
@@ -187,7 +191,7 @@ pub(super) fn tool_palette_geometry(
             outer + WHEEL_BORDER_WIDTH,
             start..end,
             0.0,
-            [0.03, 0.03, 0.03, 0.95],
+            GAP_LINE_COLOR,
         );
         push_wedge(
             &mut buffers,
@@ -197,11 +201,11 @@ pub(super) fn tool_palette_geometry(
             start..end,
             SEPARATOR_HALF_WIDTH,
             if is_hovered {
-                [0.1, 0.75, 1.0, 0.98]
+                HOVER_COLOR
             } else if is_active {
-                [0.12, 0.38, 0.5, 0.97]
+                ACTIVE_COLOR
             } else {
-                [0.16, 0.18, 0.22, 0.97]
+                [0.16, 0.18, 0.22, 0.95]
             },
         );
         let icon_center = Point::new(
@@ -211,6 +215,10 @@ pub(super) fn tool_palette_geometry(
         push_tool_icon(&mut buffers, icon_center, tool);
     }
     Geometry::new(buffers)
+}
+
+const fn rgb_to_f32(r: u8, g: u8, b: u8, alpha: f32) -> [f32; 4] {
+    [r as f32 / 255., g as f32 / 255., b as f32 / 255., alpha]
 }
 
 fn opaque([red, green, blue, _]: [f32; 4]) -> [f32; 4] {
