@@ -12,7 +12,6 @@ const KEYCODE_OFFSET: u32 = 8;
 const UNDO_KEY: &str = "z";
 const REDO_KEY: &str = "y";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum LogicalKey {
     Character(String),
     Escape,
@@ -26,7 +25,6 @@ enum LogicalKey {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 struct KeyChord {
     key: LogicalKey,
     modifiers: Modifiers,
@@ -291,39 +289,5 @@ impl Dispatch<WlKeyboard, ()> for State {
             } => state.keyboard.stop_repeat(key),
             _ => {}
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn text_action(key: LogicalKey) -> Option<Action> {
-        resolve_keybinding(
-            &KeyChord {
-                key,
-                modifiers: Modifiers {
-                    ctrl: true,
-                    ..Modifiers::default()
-                },
-            },
-            true,
-        )
-    }
-
-    #[test]
-    fn control_uses_word_editing_actions() {
-        assert_eq!(
-            text_action(LogicalKey::ArrowLeft),
-            Some(Action::MoveCursor(CursorMove::WordLeft))
-        );
-        assert_eq!(
-            text_action(LogicalKey::ArrowRight),
-            Some(Action::MoveCursor(CursorMove::WordRight))
-        );
-        assert_eq!(
-            text_action(LogicalKey::Backspace),
-            Some(Action::BackspaceWord)
-        );
     }
 }

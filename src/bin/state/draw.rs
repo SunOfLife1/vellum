@@ -19,7 +19,7 @@ pub(crate) use self::tool::Tool;
 
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Modifiers {
     pub shift: bool,
     pub ctrl: bool,

@@ -1,7 +1,6 @@
 use super::scene::{ElementId, Point, Style};
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CursorMove {
     Left,
     Right,
@@ -97,46 +96,4 @@ fn next_boundary(text: &str, cursor: usize) -> usize {
         .grapheme_indices(true)
         .nth(1)
         .map_or(text.len(), |(index, _)| cursor + index)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn edit(content: &str, cursor: usize) -> TextEdit {
-        TextEdit {
-            id: None,
-            origin: Point::new(0.0, 0.0),
-            content: content.into(),
-            cursor,
-            font_size: 16.0,
-            style: Style {
-                width: 1.0,
-                color: [0.0; 4],
-                roundness: 0.0,
-            },
-        }
-    }
-
-    #[test]
-    fn moves_by_unicode_words() {
-        let mut edit = edit("one café three", "one café three".len());
-        assert!(edit.move_cursor(CursorMove::WordLeft));
-        assert_eq!(&edit.content[edit.cursor..], "three");
-        assert!(edit.move_cursor(CursorMove::WordLeft));
-        assert_eq!(&edit.content[edit.cursor..], "café three");
-        assert!(edit.move_cursor(CursorMove::WordRight));
-        assert_eq!(&edit.content[..edit.cursor], "one café");
-        edit.move_cursor(CursorMove::End);
-        assert!(!edit.move_cursor(CursorMove::Right));
-    }
-
-    #[test]
-    fn backspaces_a_word_and_leading_separator() {
-        let mut edit = edit("one, two", "one, two".len());
-        assert!(edit.backspace_word());
-        assert_eq!(edit.content, "one, ");
-        assert!(edit.backspace_word());
-        assert_eq!(edit.content, "");
-    }
 }

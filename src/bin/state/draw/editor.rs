@@ -44,7 +44,6 @@ fn stepped_size(value: f32, default: f32, steps: f32, increment: f32, min: f32, 
     (default + (aligned + steps) * increment).clamp(min, max)
 }
 
-#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Action {
     Undo,
     Redo,
@@ -110,7 +109,7 @@ impl Damage {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Default)]
 pub struct EditorEffect {
     pub damage: Damage,
     pub deactivate: bool,
@@ -299,7 +298,7 @@ impl Editor {
     pub fn handle_action(&mut self, action: Action) -> EditorEffect {
         let mut effect = EditorEffect::default();
         let closed_picker = self.picker.take().is_some();
-        if closed_picker && action == Action::Cancel {
+        if closed_picker && matches!(action, Action::Cancel) {
             effect.damage = Damage::Preview;
             return effect;
         }
