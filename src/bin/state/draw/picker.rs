@@ -6,8 +6,10 @@ const INNER_RADIUS: f32 = 30.0;
 const OUTER_RADIUS: f32 = 88.0;
 const WHEEL_BORDER_WIDTH: f32 = 3.0;
 const HOVER_EXTENSION: f32 = 6.0;
-const PREVIEW_BORDER_WIDTH: f32 = 2.0;
+const PREVIEW_BORDER_WIDTH: f32 = 1.0;
 const SEPARATOR_HALF_WIDTH: f32 = 2.0;
+
+const GAP_LINE_COLOR: [f32; 4] = [0.03, 0.03, 0.03, 1.0];
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Picker {
@@ -89,7 +91,7 @@ fn push_color_preview(
     color: [f32; 4],
 ) {
     let radius = INNER_RADIUS - WHEEL_BORDER_WIDTH;
-    push_disc(buffers, center, radius, [0.8, 0.8, 0.8, 1.0]);
+    push_disc(buffers, center, radius, GAP_LINE_COLOR);
     push_disc(
         buffers,
         center,
@@ -150,7 +152,7 @@ pub(super) fn palette_geometry(
             outer + WHEEL_BORDER_WIDTH,
             start..end,
             0.0,
-            [0.04, 0.04, 0.04, 0.94],
+            GAP_LINE_COLOR,
         );
         push_wedge(
             &mut buffers,
@@ -187,7 +189,7 @@ pub(super) fn tool_palette_geometry(
             outer + WHEEL_BORDER_WIDTH,
             start..end,
             0.0,
-            [0.03, 0.03, 0.03, 0.95],
+            GAP_LINE_COLOR,
         );
         push_wedge(
             &mut buffers,
