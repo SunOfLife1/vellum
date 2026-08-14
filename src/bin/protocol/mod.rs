@@ -6,6 +6,10 @@ impl Command {
     pub fn serialize(&self) -> &'static [u8] {
         match self {
             Self::Toggle => b"toggle",
+            Self::Activate => b"activate",
+            Self::Deactivate => b"deactivate",
+            Self::Clear => b"clear",
+            Self::ClearAndDeactivate => b"clear_and_deactivate",
             Self::Exit => b"exit",
         }
     }
@@ -13,6 +17,10 @@ impl Command {
     pub fn deserialize(message: &[u8]) -> Result<Self, &'static str> {
         match message {
             b"toggle" => Ok(Self::Toggle),
+            b"activate" => Ok(Self::Activate),
+            b"deactivate" => Ok(Self::Deactivate),
+            b"clear" => Ok(Self::Clear),
+            b"clear_and_deactivate" => Ok(Self::ClearAndDeactivate),
             b"exit" => Ok(Self::Exit),
             _ => Err("invalid command"),
         }

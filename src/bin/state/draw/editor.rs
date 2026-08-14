@@ -49,6 +49,7 @@ pub(crate) enum Action {
     Redo,
     SelectAll,
     Delete,
+    Clear,
     Cancel,
     CommitText,
     Backspace,
@@ -289,6 +290,7 @@ impl Editor {
                     effect.damage = self.delete_selection();
                 }
             }
+            Action::Clear => effect.damage = self.clear(),
             Action::Cancel => {
                 let cancelled = self.cancel_interaction();
                 if cancelled.changed() || !std::mem::take(&mut self.selected).is_empty() {
@@ -1023,6 +1025,17 @@ impl Editor {
         }
         self.selected = selected;
         damage.max(Damage::Preview)
+    }
+
+    fn clear(&mut self) -> Damage {
+        let cancelled = self.cancel_interaction();
+        if self.elements.is_empty() {
+            return cancelled;
+        }
+        let elements = std::mem::take(&mut self.elements);
+        self.history.record(HistoryEntry::Clear(elements));
+        self.selected.clear();
+        Damage::Scene
     }
 
     fn delete_selection(&mut self) -> Damage {

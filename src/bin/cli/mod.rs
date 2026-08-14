@@ -22,9 +22,17 @@ pub(super) struct Cli {
 
 #[derive(clap::Subcommand)]
 pub(crate) enum Command {
-    /// Activate or deactivate drawing mode
+    /// Switch drawing mode
     Toggle,
-    /// Exit the running overlay
+    /// Activate drawing mode
+    Activate,
+    /// Deactivate drawing mode
+    Deactivate,
+    /// Clear annotations
+    Clear,
+    /// Clear annotations and deactivate drawing mode
+    ClearAndDeactivate,
+    /// Stop Vellum
     Exit,
 }
 

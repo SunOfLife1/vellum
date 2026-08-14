@@ -254,10 +254,17 @@ impl State {
     }
 
     pub fn toggle_input(&mut self) {
-        if self.active {
-            self.deactivate();
-        } else {
+        self.set_input_active(!self.active);
+    }
+
+    pub fn set_input_active(&mut self, active: bool) {
+        if active == self.active {
+            return;
+        }
+        if active {
             self.activate();
+        } else {
+            self.deactivate();
         }
     }
 
@@ -319,6 +326,10 @@ impl State {
         if effect.deactivate {
             self.deactivate();
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.apply_action(Action::Clear);
     }
 
     fn modifiers(&self) -> Modifiers {

@@ -316,6 +316,13 @@ fn run_overlay(settings: Settings) {
                 };
                 match command {
                     Command::Toggle => state.toggle_input(),
+                    Command::Activate => state.set_input_active(true),
+                    Command::Deactivate => state.set_input_active(false),
+                    Command::Clear => state.clear(),
+                    Command::ClearAndDeactivate => {
+                        state.clear();
+                        state.set_input_active(false);
+                    }
                     Command::Exit => break 'running,
                 }
             }
