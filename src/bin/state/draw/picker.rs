@@ -1,6 +1,7 @@
 use super::scene::Point;
 use super::tool::Tool;
 use crate::render::{Geometry, Vertex};
+use crate::rgb_to_f32;
 
 const INNER_RADIUS: f32 = 30.0;
 const OUTER_RADIUS: f32 = 88.0;
@@ -199,11 +200,11 @@ pub(super) fn tool_palette_geometry(
             start..end,
             SEPARATOR_HALF_WIDTH,
             if is_hovered {
-                [0.1, 0.75, 1.0, 0.98]
+                rgb_to_f32(66, 149, 232, 0.98)
             } else if is_active {
-                [0.12, 0.38, 0.5, 0.97]
+                rgb_to_f32(48, 91, 134, 0.95)
             } else {
-                [0.16, 0.18, 0.22, 0.97]
+                [0.16, 0.18, 0.22, 0.95]
             },
         );
         let icon_center = Point::new(
