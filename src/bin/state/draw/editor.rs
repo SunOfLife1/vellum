@@ -47,6 +47,7 @@ fn stepped_size(value: f32, default: f32, steps: f32, increment: f32, min: f32, 
 pub(crate) enum Action {
     Undo,
     Redo,
+    SelectAll,
     Delete,
     Clear,
     Cancel,
@@ -305,6 +306,7 @@ impl Editor {
         match action {
             Action::Undo if !self.is_editing_text() => effect.damage = self.undo(),
             Action::Redo if !self.is_editing_text() => effect.damage = self.redo(),
+            Action::SelectAll => effect.damage = self.select_all(),
             Action::Delete => {
                 if let Some(edit) = self.text_edit_mut() {
                     effect.damage = Damage::from_preview(edit.delete());
@@ -1035,6 +1037,20 @@ impl Editor {
         Damage::Scene
     }
 
+    fn select_all(&mut self) -> Damage {
+        let cancelled = self.cancel_interaction();
+        if self.elements.is_empty() {
+            return cancelled;
+        }
+        let damage = cancelled.max(self.switch_tool(Tool::Select));
+        let selected = self.elements.iter().map(|element| element.id).collect();
+        if self.selected == selected {
+            return damage;
+        }
+        self.selected = selected;
+        damage.max(Damage::Preview)
+    }
+
     pub fn clear(&mut self) -> Damage {
         let cancelled = self.cancel_interaction();
         if self.elements.is_empty() {
@@ -1052,6 +1068,11 @@ impl Editor {
             return Damage::None;
         }
         let cancelled = self.cancel_interaction();
+        if selected.len() == self.elements.len() {
+            let elements = std::mem::take(&mut self.elements);
+            self.history.record(HistoryEntry::Clear(elements));
+            return cancelled.max(Damage::Scene);
+        }
         cancelled.max(Damage::from_scene(self.remove_ids(&selected)))
     }
 

@@ -9,6 +9,7 @@ use super::super::State;
 use super::super::draw::{Action, CursorMove, Modifiers};
 
 const KEYCODE_OFFSET: u32 = 8;
+const SELECT_ALL_KEY: &str = "a";
 const UNDO_KEY: &str = "z";
 const REDO_KEY: &str = "y";
 
@@ -56,6 +57,11 @@ fn resolve_keybinding(chord: &KeyChord, editing_text: bool) -> Option<Action> {
     match &chord.key {
         Escape => Some(Action::Cancel),
         Delete | Backspace => Some(Action::Delete),
+        Character(character)
+            if chord.modifiers.ctrl && character.eq_ignore_ascii_case(SELECT_ALL_KEY) =>
+        {
+            Some(Action::SelectAll)
+        }
         Character(character)
             if chord.modifiers.ctrl && character.eq_ignore_ascii_case(REDO_KEY) =>
         {

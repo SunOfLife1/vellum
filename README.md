@@ -36,6 +36,7 @@ Mod+A { spawn "vellum" "toggle"; }
 | Double-click selected text | Edit it |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
+| `Ctrl+A` | Select all annotations |
 | `Backspace` or `Delete` | Delete selected annotations |
 | `Escape` | Cancel, clear the selection, or leave drawing mode |
 
