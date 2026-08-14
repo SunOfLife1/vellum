@@ -200,9 +200,9 @@ pub(super) fn tool_palette_geometry(
             start..end,
             SEPARATOR_HALF_WIDTH,
             if is_hovered {
-                rgb_to_f32(66, 149, 232, 0.98)
+                rgb_to_f32(2, 131, 252, 0.98)
             } else if is_active {
-                rgb_to_f32(48, 91, 134, 0.95)
+                rgb_to_f32(55, 100, 138, 0.95)
             } else {
                 [0.16, 0.18, 0.22, 0.95]
             },
