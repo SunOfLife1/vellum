@@ -1,7 +1,6 @@
 use super::scene::Point;
 use super::tool::Tool;
 use crate::render::{Geometry, Vertex};
-use crate::rgb_to_f32;
 
 const INNER_RADIUS: f32 = 30.0;
 const OUTER_RADIUS: f32 = 88.0;
@@ -11,6 +10,8 @@ const PREVIEW_BORDER_WIDTH: f32 = 1.0;
 const SEPARATOR_HALF_WIDTH: f32 = 2.0;
 
 const GAP_LINE_COLOR: [f32; 4] = [0.03, 0.03, 0.03, 1.0];
+const HOVER_COLOR: [f32; 4] = rgb_to_f32(2, 131, 252, 0.98);
+const ACTIVE_COLOR: [f32; 4] = rgb_to_f32(55, 100, 138, 0.95);
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Picker {
@@ -200,9 +201,9 @@ pub(super) fn tool_palette_geometry(
             start..end,
             SEPARATOR_HALF_WIDTH,
             if is_hovered {
-                rgb_to_f32(2, 131, 252, 0.98)
+                HOVER_COLOR
             } else if is_active {
-                rgb_to_f32(55, 100, 138, 0.95)
+                ACTIVE_COLOR
             } else {
                 [0.16, 0.18, 0.22, 0.95]
             },
@@ -214,6 +215,10 @@ pub(super) fn tool_palette_geometry(
         push_tool_icon(&mut buffers, icon_center, tool);
     }
     Geometry::new(buffers)
+}
+
+const fn rgb_to_f32(r: u8, g: u8, b: u8, alpha: f32) -> [f32; 4] {
+    [r as f32 / 255., g as f32 / 255., b as f32 / 255., alpha]
 }
 
 fn opaque([red, green, blue, _]: [f32; 4]) -> [f32; 4] {

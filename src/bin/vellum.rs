@@ -99,10 +99,6 @@ impl Settings {
     }
 }
 
-pub const fn rgb_to_f32(r: u8, g: u8, b: u8, alpha: f32) -> [f32; 4] {
-    [r as f32 / 255., g as f32 / 255., b as f32 / 255., alpha]
-}
-
 fn parse_named_color(name: &str, value: &str) -> Result<Rgb, String> {
     parse_color(value).map_err(|error| format!("invalid {name} {value:?}: {error}"))
 }
