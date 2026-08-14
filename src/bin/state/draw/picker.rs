@@ -4,6 +4,10 @@ use crate::render::{Geometry, Vertex};
 
 const INNER_RADIUS: f32 = 30.0;
 const OUTER_RADIUS: f32 = 88.0;
+const WHEEL_BORDER_WIDTH: f32 = 3.0;
+const HOVER_EXTENSION: f32 = 6.0;
+const PREVIEW_BORDER_WIDTH: f32 = 2.0;
+const SEPARATOR_HALF_WIDTH: f32 = 2.0;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Picker {
@@ -79,23 +83,42 @@ fn push_disc(
     }
 }
 
+fn push_color_preview(
+    buffers: &mut lyon_tessellation::VertexBuffers<Vertex, u32>,
+    center: Point,
+    color: [f32; 4],
+) {
+    let radius = INNER_RADIUS - WHEEL_BORDER_WIDTH;
+    push_disc(buffers, center, radius, [0.8, 0.8, 0.8, 1.0]);
+    push_disc(
+        buffers,
+        center,
+        radius - PREVIEW_BORDER_WIDTH,
+        opaque(color),
+    );
+}
+
 fn push_wedge(
     buffers: &mut lyon_tessellation::VertexBuffers<Vertex, u32>,
     center: Point,
     inner: f32,
     outer: f32,
-    start: f32,
-    end: f32,
+    angles: std::ops::Range<f32>,
+    edge_inset: f32,
     color: [f32; 4],
 ) {
     const SEGMENTS: usize = 8;
     let base = buffers.vertices.len() as u32;
+    let inner_inset = (edge_inset / inner).asin();
+    let outer_inset = (edge_inset / outer).asin();
+    let span = angles.end - angles.start;
     for index in 0..=SEGMENTS {
         let fraction = index as f32 / SEGMENTS as f32;
-        let angle = start + (end - start) * fraction;
+        let inner_angle = angles.start + inner_inset + (span - 2.0 * inner_inset) * fraction;
+        let outer_angle = angles.start + outer_inset + (span - 2.0 * outer_inset) * fraction;
         buffers.vertices.extend([
-            Vertex::at(radial_point(center, inner, angle), color),
-            Vertex::at(radial_point(center, outer, angle), color),
+            Vertex::at(radial_point(center, inner, inner_angle), color),
+            Vertex::at(radial_point(center, outer, outer_angle), color),
         ]);
     }
     for index in 0..SEGMENTS as u32 {
@@ -112,34 +135,30 @@ pub(super) fn palette_geometry(
     current_color: [f32; 4],
     palette: &[[f32; 3]],
 ) -> Geometry {
-    let current_color = opaque(current_color);
     let mut buffers = lyon_tessellation::VertexBuffers::new();
-    push_disc(&mut buffers, center, 24.0, [0.04, 0.04, 0.04, 0.95]);
-    push_disc(&mut buffers, center, 20.0, [0.8, 0.8, 0.8, 1.0]);
-    push_disc(&mut buffers, center, 17.0, current_color);
-    let slices = palette.len();
-    let step = std::f32::consts::TAU / slices as f32;
+    push_color_preview(&mut buffers, center, current_color);
+    let step = std::f32::consts::TAU / palette.len() as f32;
     for (index, &[red, green, blue]) in palette.iter().enumerate() {
         let selected = hovered == Some(index);
+        let outer = OUTER_RADIUS + if selected { HOVER_EXTENSION } else { 0.0 };
         let start = index as f32 * step - step * 0.5;
         let end = start + step;
         push_wedge(
             &mut buffers,
             center,
-            INNER_RADIUS - 3.0,
-            OUTER_RADIUS + if selected { 9.0 } else { 3.0 },
-            start,
-            end,
+            INNER_RADIUS - WHEEL_BORDER_WIDTH,
+            outer + WHEEL_BORDER_WIDTH,
+            start..end,
+            0.0,
             [0.04, 0.04, 0.04, 0.94],
         );
-        let gap = 0.025;
         push_wedge(
             &mut buffers,
             center,
             INNER_RADIUS,
-            OUTER_RADIUS + if selected { 6.0 } else { 0.0 },
-            start + gap,
-            end - gap,
+            outer,
+            start..end,
+            SEPARATOR_HALF_WIDTH,
             [red, green, blue, 0.98],
         );
     }
@@ -152,33 +171,31 @@ pub(super) fn tool_palette_geometry(
     active: Tool,
     current_color: [f32; 4],
 ) -> Geometry {
-    let current_color = opaque(current_color);
     let mut buffers = lyon_tessellation::VertexBuffers::new();
-    push_disc(&mut buffers, center, 24.0, [0.04, 0.04, 0.04, 0.95]);
-    push_disc(&mut buffers, center, 20.0, [0.8, 0.8, 0.8, 1.0]);
-    push_disc(&mut buffers, center, 17.0, current_color);
+    push_color_preview(&mut buffers, center, current_color);
     let step = std::f32::consts::TAU / TOOL_CHOICES.len() as f32;
     for (index, tool) in TOOL_CHOICES.iter().copied().enumerate() {
         let is_hovered = hovered == Some(tool);
         let is_active = tool == active;
+        let outer = OUTER_RADIUS + if is_hovered { HOVER_EXTENSION } else { 0.0 };
         let start = index as f32 * step - step * 0.5;
         let end = start + step;
         push_wedge(
             &mut buffers,
             center,
-            INNER_RADIUS - 3.0,
-            OUTER_RADIUS + if is_hovered { 9.0 } else { 3.0 },
-            start,
-            end,
+            INNER_RADIUS - WHEEL_BORDER_WIDTH,
+            outer + WHEEL_BORDER_WIDTH,
+            start..end,
+            0.0,
             [0.03, 0.03, 0.03, 0.95],
         );
         push_wedge(
             &mut buffers,
             center,
             INNER_RADIUS,
-            OUTER_RADIUS + if is_hovered { 6.0 } else { 0.0 },
-            start + 0.025,
-            end - 0.025,
+            outer,
+            start..end,
+            SEPARATOR_HALF_WIDTH,
             if is_hovered {
                 [0.1, 0.75, 1.0, 0.98]
             } else if is_active {
