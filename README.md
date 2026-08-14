@@ -34,7 +34,9 @@ Mod+A { spawn "vellum" "toggle"; }
 | `Shift` + wheel | Change roundness |
 | `Ctrl` + click in Select | Add or remove an annotation from the selection |
 | Double-click selected text | Edit it |
-| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
+| `Backspace` or `Delete` | Delete selected annotations |
 | `Escape` | Cancel, clear the selection, or leave drawing mode |
 
 Drag selection handles to reshape supported elements. While drawing, `Shift` constrains geometry

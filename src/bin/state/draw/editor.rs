@@ -48,7 +48,7 @@ fn stepped_size(value: f32, default: f32, steps: f32, increment: f32, min: f32, 
 pub(crate) enum Action {
     Undo,
     Redo,
-    DeleteForward,
+    Delete,
     Clear,
     Cancel,
     CommitText,
@@ -306,9 +306,11 @@ impl Editor {
         match action {
             Action::Undo if !self.is_editing_text() => effect.damage = self.undo(),
             Action::Redo if !self.is_editing_text() => effect.damage = self.redo(),
-            Action::DeleteForward => {
+            Action::Delete => {
                 if let Some(edit) = self.text_edit_mut() {
                     effect.damage = Damage::from_preview(edit.delete());
+                } else {
+                    effect.damage = self.delete_selection();
                 }
             }
             Action::Clear => effect.damage = self.clear(),
@@ -1045,6 +1047,31 @@ impl Editor {
         Damage::Scene
     }
 
+    fn delete_selection(&mut self) -> Damage {
+        let selected = std::mem::take(&mut self.selected);
+        if selected.is_empty() {
+            return Damage::None;
+        }
+        let cancelled = self.cancel_interaction();
+        cancelled.max(Damage::from_scene(self.remove_ids(&selected)))
+    }
+
+    fn remove_ids(&mut self, ids: &[ElementId]) -> bool {
+        let mut removed = Vec::with_capacity(ids.len());
+        for index in (0..self.elements.len()).rev() {
+            if ids.contains(&self.elements[index].id) {
+                removed.push((index, self.elements.remove(index)));
+            }
+        }
+        if removed.is_empty() {
+            return false;
+        }
+        removed.reverse();
+        self.history.record(HistoryEntry::Remove(removed));
+        self.selected.retain(|selected| !ids.contains(selected));
+        true
+    }
+
     fn insert_kind(&mut self, kind: ElementKind, style: Style) {
         self.insert_kind_with_geometry(kind, style, None);
     }
@@ -1067,14 +1094,7 @@ impl Editor {
     }
 
     fn remove_id(&mut self, id: ElementId) -> bool {
-        let Some(index) = self.elements.iter().position(|element| element.id == id) else {
-            return false;
-        };
-        let element = self.elements.remove(index);
-        self.history
-            .record(HistoryEntry::Remove(vec![(index, element)]));
-        self.selected.retain(|selected| *selected != id);
-        true
+        self.remove_ids(&[id])
     }
 
     fn erase_at(&mut self, point: Point) -> bool {

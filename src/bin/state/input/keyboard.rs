@@ -10,6 +10,7 @@ use super::super::draw::{Action, CursorMove, Modifiers};
 
 const KEYCODE_OFFSET: u32 = 8;
 const UNDO_KEY: &str = "z";
+const REDO_KEY: &str = "y";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LogicalKey {
@@ -37,7 +38,7 @@ fn resolve_keybinding(chord: &KeyChord, editing_text: bool) -> Option<Action> {
     if editing_text {
         return match &chord.key {
             Escape => Some(Action::Cancel),
-            Delete => Some(Action::DeleteForward),
+            Delete => Some(Action::Delete),
             Backspace if chord.modifiers.ctrl => Some(Action::BackspaceWord),
             Backspace => Some(Action::Backspace),
             Enter => Some(Action::CommitText),
@@ -56,6 +57,12 @@ fn resolve_keybinding(chord: &KeyChord, editing_text: bool) -> Option<Action> {
 
     match &chord.key {
         Escape => Some(Action::Cancel),
+        Delete | Backspace => Some(Action::Delete),
+        Character(character)
+            if chord.modifiers.ctrl && character.eq_ignore_ascii_case(REDO_KEY) =>
+        {
+            Some(Action::Redo)
+        }
         Character(character)
             if chord.modifiers.ctrl && character.eq_ignore_ascii_case(UNDO_KEY) =>
         {
