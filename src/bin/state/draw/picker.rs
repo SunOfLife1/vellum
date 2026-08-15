@@ -92,12 +92,12 @@ fn push_color_preview(
     center: Point,
     color: [f32; 4],
 ) {
-    let radius = INNER_RADIUS - WHEEL_BORDER_WIDTH;
-    push_disc(buffers, center, radius, GAP_LINE_COLOR);
+    let preview_radius = INNER_RADIUS - WHEEL_BORDER_WIDTH;
+    push_disc(buffers, center, INNER_RADIUS, GAP_LINE_COLOR);
     push_disc(
         buffers,
         center,
-        radius - PREVIEW_BORDER_WIDTH,
+        preview_radius - PREVIEW_BORDER_WIDTH,
         opaque(color),
     );
 }
