@@ -20,6 +20,7 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::EVT_TABLET_A
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::EVT_TOOL_ADDED_OPCODE;
 
 use super::super::State;
+use super::short_click;
 
 const EVDEV_STYLUS: u32 = 331;
 const EVDEV_STYLUS2: u32 = 332;
@@ -37,6 +38,7 @@ pub(in crate::state) struct TabletState {
     pos: Option<(f64, f64)>,
     pen_held: bool,
     button_held: bool,
+    button_press_time: Option<u32>,
 }
 
 impl TabletState {
@@ -118,6 +120,11 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
             let button_pressed = sequence.pressed(BUTTON);
             let button_released = sequence.released(BUTTON);
             let eraser = state.tablet.eraser_tools.contains(&tablet_tool.id());
+            if button_pressed {
+                state.tablet.button_press_time = Some(sequence.time);
+            }
+            let short_button_click = button_released
+                && short_click(state.tablet.button_press_time.take(), Some(sequence.time));
 
             if let Some(device) = state
                 .tablet
@@ -157,7 +164,7 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
                 && state.draw.picker_active()
                 && let Some(pos) = state.tablet.pos
             {
-                state.pointer_up(pos, modifiers, true);
+                state.pointer_up(pos, modifiers, short_button_click);
             }
             if !button_pressed
                 && !button_released
@@ -183,6 +190,7 @@ struct EventSequence {
     released: u8,
 
     enter_serial: Option<u32>,
+    time: u32,
 }
 
 impl EventSequence {
@@ -232,7 +240,8 @@ impl EventSequence {
                 }
                 None
             }
-            Event::Frame { time: _ } => {
+            Event::Frame { time } => {
+                self.time = time;
                 let mut tmp = Self::default();
                 std::mem::swap(self, &mut tmp);
                 Some(tmp)

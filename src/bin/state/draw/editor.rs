@@ -561,7 +561,6 @@ impl Editor {
         self.picker = Some(Picker {
             center,
             hovered: None,
-            engaged: false,
         });
         Damage::Preview
     }
@@ -573,7 +572,6 @@ impl Editor {
         let choice = choice(picker.center, point, self.palette.len());
         let changed = picker.hovered != choice;
         picker.hovered = choice;
-        picker.engaged |= choice.is_some();
         Damage::from_preview(changed)
     }
 
@@ -582,7 +580,7 @@ impl Editor {
             return Damage::None;
         };
         let choice = choice(picker.center, point, self.palette.len());
-        if choice.is_none() && latch_center && !picker.engaged {
+        if choice.is_none() && latch_center {
             return Damage::None;
         }
         self.picker = None;

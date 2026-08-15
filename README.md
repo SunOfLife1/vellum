@@ -27,7 +27,7 @@ Mod+A { spawn "vellum" "toggle"; }
 | --- | --- |
 | Left drag | Draw or manipulate the selection |
 | Hold right click, move, and release | Choose a tool or color |
-| Right click without moving | Keep the wheel open for click selection |
+| Short right click | Keep the wheel open for click selection |
 | Middle drag | Erase annotations |
 | Pen barrel button while hovering | Open the wheel |
 | Pen barrel button while drawing | Temporarily erase |

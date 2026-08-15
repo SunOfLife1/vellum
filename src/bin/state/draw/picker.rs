@@ -26,7 +26,6 @@ pub(super) enum Choice {
 pub(super) struct Picker {
     pub center: Point,
     pub hovered: Option<Choice>,
-    pub engaged: bool,
 }
 
 const TOOL_CHOICES: [Tool; 8] = [

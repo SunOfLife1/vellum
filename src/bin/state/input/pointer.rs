@@ -11,6 +11,7 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::
 
 use super::super::State;
 use super::super::draw::{Action, CursorHint, Point};
+use super::short_click;
 
 const EVDEV_LEFT: u32 = 272;
 const EVDEV_RIGHT: u32 = 273;
@@ -38,6 +39,7 @@ pub(in crate::state) struct PointerState {
     middle_button_held: bool,
     left_button_in_picker: bool,
     left_press_pos: Option<(f64, f64)>,
+    right_press_time: Option<u32>,
     last_left_click: Option<(u32, (f64, f64))>,
     scroll_remainder: f64,
 }
@@ -61,6 +63,7 @@ impl PointerState {
         self.middle_button_held = false;
         self.left_button_in_picker = false;
         self.left_press_pos = None;
+        self.right_press_time = None;
         self.last_left_click = None;
         self.scroll_remainder = 0.0;
         interaction_active
@@ -160,6 +163,7 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                     .filter(|_| !double_click);
             }
             if right_pressed && let Some(pos) = state.pointer.position {
+                state.pointer.right_press_time = sequence.right_button_time;
                 state.toggle_picker(pos);
             }
             if middle_pressed && let Some(pos) = state.pointer.position {
@@ -198,7 +202,11 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                     state.pointer.left_press_pos = None;
                 }
                 if right_released {
-                    state.pointer_up(pos, modifiers, true);
+                    let latch_picker = short_click(
+                        state.pointer.right_press_time.take(),
+                        sequence.right_button_time,
+                    );
+                    state.pointer_up(pos, modifiers, latch_picker);
                 }
                 if middle_released {
                     state.pointer_up(pos, modifiers, false);
@@ -236,6 +244,7 @@ struct EventSequence {
     pressed: u8,
     released: u8,
     left_press_time: Option<u32>,
+    right_button_time: Option<u32>,
     axis_vertical: f64,
     axis_discrete: i32,
     axis_value120: i32,
@@ -312,6 +321,9 @@ impl EventSequence {
                 *transition |= mask;
                 if mask == LEFT && matches!(button_state, WEnum::Value(ButtonState::Pressed)) {
                     self.left_press_time = Some(time);
+                }
+                if mask == RIGHT {
+                    self.right_button_time = Some(time);
                 }
                 None
             }
