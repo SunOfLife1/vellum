@@ -49,4 +49,6 @@ in
       mkdir -p "$out/share/man/man1"
       install -m644 "$man_dir"/*.1 "$out/share/man/man1/"
     '';
+
+    meta.platforms = lib.platforms.linux;
   }
