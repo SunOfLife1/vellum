@@ -10,14 +10,20 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::WpCursorShapeDeviceV1;
 
 use super::super::State;
-use super::super::draw::{CursorHint, Point};
+use super::super::draw::{Action, CursorHint, Point};
 
 const EVDEV_LEFT: u32 = 272;
 const EVDEV_RIGHT: u32 = 273;
 const EVDEV_MIDDLE: u32 = 274;
+const EVDEV_SIDE: u32 = 275;
+const EVDEV_EXTRA: u32 = 276;
+const EVDEV_FORWARD: u32 = 277;
+const EVDEV_BACK: u32 = 278;
 const LEFT: u8 = 1;
 const RIGHT: u8 = 2;
 const MIDDLE: u8 = 4;
+const UNDO: u8 = 8;
+const REDO: u8 = 16;
 
 #[derive(Default)]
 pub(in crate::state) struct PointerState {
@@ -112,6 +118,13 @@ impl Dispatch<WlPointer, (), State> for PointerState {
             let right_released = sequence.released(RIGHT);
             let middle_pressed = sequence.pressed(MIDDLE);
             let middle_released = sequence.released(MIDDLE);
+
+            if sequence.pressed(UNDO) {
+                state.apply_action(Action::Undo);
+            }
+            if sequence.pressed(REDO) {
+                state.apply_action(Action::Redo);
+            }
 
             if (sequence.enter_serial.is_some() || sequence.motion.is_some())
                 && let Some((x, y)) = state.pointer.position
@@ -292,6 +305,8 @@ impl EventSequence {
                     EVDEV_LEFT => LEFT,
                     EVDEV_RIGHT => RIGHT,
                     EVDEV_MIDDLE => MIDDLE,
+                    EVDEV_SIDE | EVDEV_BACK => UNDO,
+                    EVDEV_EXTRA | EVDEV_FORWARD => REDO,
                     _ => return None,
                 };
                 *transition |= mask;

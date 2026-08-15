@@ -32,6 +32,8 @@ Mod+A { spawn "vellum" "toggle"; }
 | Pen barrel button while hovering | Open the wheel |
 | Pen barrel button while drawing | Temporarily erase |
 | Pen eraser | Erase annotations |
+| Mouse back button | Undo |
+| Mouse forward button | Redo |
 | Mouse wheel | Change stroke width or text size |
 | `Ctrl` + wheel | Change opacity |
 | `Shift` + wheel | Change roundness |
