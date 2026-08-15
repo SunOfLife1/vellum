@@ -121,14 +121,14 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
                 && state.tablet.pen_held
                 && let Some(pos) = state.tablet.pos
             {
-                state.pointer_up(pos, modifiers);
+                state.pointer_up(pos, modifiers, false);
                 state.pointer_down(pos, modifiers, true);
             }
             if button_released
                 && state.tablet.pen_held
                 && let Some(pos) = state.tablet.pos
             {
-                state.pointer_up(pos, modifiers);
+                state.pointer_up(pos, modifiers, false);
                 state.pointer_down(pos, modifiers, false);
             }
             if !button_pressed
@@ -140,7 +140,7 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
                 state.pointer_motion(pos, modifiers);
             }
             if pen_released && let Some(pos) = state.tablet.pos {
-                state.pointer_up(pos, modifiers);
+                state.pointer_up(pos, modifiers, false);
             }
         }
     }

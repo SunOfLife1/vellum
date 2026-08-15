@@ -384,11 +384,11 @@ impl State {
         }
     }
 
-    fn pointer_up(&mut self, (x, y): (f64, f64), modifiers: Modifiers) {
+    fn pointer_up(&mut self, (x, y): (f64, f64), modifiers: Modifiers, latch_picker: bool) {
         self.flush_pen_motion();
         let point = Point::new(x as f32, y as f32);
         if self.draw.picker_active() {
-            if self.draw.picker_release(point) {
+            if self.draw.picker_release(point, latch_picker) {
                 self.request_render();
             }
             return;
@@ -398,8 +398,8 @@ impl State {
         }
     }
 
-    fn open_tool_picker(&mut self, (x, y): (f64, f64)) {
-        if self.draw.open_tool_picker(Point::new(x as f32, y as f32)) {
+    fn open_picker(&mut self, (x, y): (f64, f64)) {
+        if self.draw.open_picker(Point::new(x as f32, y as f32)) {
             self.request_render();
         }
     }

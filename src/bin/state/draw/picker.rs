@@ -2,8 +2,11 @@ use super::scene::Point;
 use super::tool::Tool;
 use crate::render::{Geometry, Vertex};
 
-const INNER_RADIUS: f32 = 30.0;
-const OUTER_RADIUS: f32 = 88.0;
+const CENTER_RADIUS: f32 = 26.0;
+const COLOR_OUTER_RADIUS: f32 = 72.0;
+const TOOL_INNER_RADIUS: f32 = 76.0;
+const TOOL_OUTER_RADIUS: f32 = 112.0;
+const TOOL_ICON_RADIUS: f32 = (TOOL_INNER_RADIUS + TOOL_OUTER_RADIUS) * 0.5;
 const WHEEL_BORDER_WIDTH: f32 = 3.0;
 const HOVER_EXTENSION: f32 = 6.0;
 const PREVIEW_BORDER_WIDTH: f32 = 1.0;
@@ -13,20 +16,17 @@ const GAP_LINE_COLOR: [f32; 4] = [0.03, 0.03, 0.03, 1.0];
 const HOVER_COLOR: [f32; 4] = rgb_to_f32(2, 131, 252, 0.98);
 const ACTIVE_COLOR: [f32; 4] = rgb_to_f32(55, 100, 138, 0.95);
 
-#[derive(Debug, Clone, Copy)]
-pub(super) enum Picker {
-    Color {
-        center: Point,
-        hovered: Option<usize>,
-    },
-    Tool {
-        center: Point,
-        hovered: Option<Tool>,
-    },
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Choice {
+    Color(usize),
+    Tool(Tool),
 }
 
-pub(super) fn palette_choice(center: Point, point: Point, color_count: usize) -> Option<usize> {
-    radial_index(center, point, color_count)
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Picker {
+    pub center: Point,
+    pub hovered: Option<Choice>,
+    pub engaged: bool,
 }
 
 const TOOL_CHOICES: [Tool; 8] = [
@@ -40,20 +40,24 @@ const TOOL_CHOICES: [Tool; 8] = [
     Tool::Eraser,
 ];
 
-pub(super) fn tool_choice(center: Point, point: Point) -> Option<Tool> {
-    radial_index(center, point, TOOL_CHOICES.len()).map(|index| TOOL_CHOICES[index])
+pub(super) fn choice(center: Point, point: Point, color_count: usize) -> Option<Choice> {
+    let distance = (point - center).length();
+    if distance < CENTER_RADIUS {
+        None
+    } else if distance < (COLOR_OUTER_RADIUS + TOOL_INNER_RADIUS) * 0.5 {
+        Some(Choice::Color(radial_index(center, point, color_count)))
+    } else {
+        Some(Choice::Tool(
+            TOOL_CHOICES[radial_index(center, point, TOOL_CHOICES.len())],
+        ))
+    }
 }
 
-fn radial_index(center: Point, point: Point, count: usize) -> Option<usize> {
+fn radial_index(center: Point, point: Point, count: usize) -> usize {
     let delta = point - center;
-    if delta.length() < INNER_RADIUS {
-        return None;
-    }
     let step = std::f32::consts::TAU / count as f32;
-    Some(
-        ((delta.y.atan2(delta.x) + step * 0.5).rem_euclid(std::f32::consts::TAU) / step).floor()
-            as usize,
-    )
+    ((delta.y.atan2(delta.x) + step * 0.5).rem_euclid(std::f32::consts::TAU) / step).floor()
+        as usize
 }
 
 fn radial_point(center: Point, radius: f32, angle: f32) -> [f32; 2] {
@@ -92,8 +96,8 @@ fn push_color_preview(
     center: Point,
     color: [f32; 4],
 ) {
-    let preview_radius = INNER_RADIUS - WHEEL_BORDER_WIDTH;
-    push_disc(buffers, center, INNER_RADIUS, GAP_LINE_COLOR);
+    let preview_radius = CENTER_RADIUS - WHEEL_BORDER_WIDTH;
+    push_disc(buffers, center, CENTER_RADIUS, GAP_LINE_COLOR);
     push_disc(
         buffers,
         center,
@@ -133,61 +137,66 @@ fn push_wedge(
     }
 }
 
-pub(super) fn palette_geometry(
+fn push_palette(
+    buffers: &mut lyon_tessellation::VertexBuffers<Vertex, u32>,
     center: Point,
-    hovered: Option<usize>,
+    hovered: Option<Choice>,
+    palette: &[[f32; 3]],
+) {
+    let step = std::f32::consts::TAU / palette.len() as f32;
+    for (index, &[red, green, blue]) in palette.iter().enumerate() {
+        let is_hovered = hovered == Some(Choice::Color(index));
+        let start = index as f32 * step - step * 0.5;
+        let end = start + step;
+        push_wedge(
+            buffers,
+            center,
+            CENTER_RADIUS - WHEEL_BORDER_WIDTH,
+            COLOR_OUTER_RADIUS + WHEEL_BORDER_WIDTH,
+            start..end,
+            0.0,
+            if is_hovered {
+                HOVER_COLOR
+            } else {
+                GAP_LINE_COLOR
+            },
+        );
+        push_wedge(
+            buffers,
+            center,
+            CENTER_RADIUS,
+            COLOR_OUTER_RADIUS,
+            start..end,
+            if is_hovered {
+                WHEEL_BORDER_WIDTH
+            } else {
+                SEPARATOR_HALF_WIDTH
+            },
+            [red, green, blue, 1.0],
+        );
+    }
+}
+
+pub(super) fn picker_geometry(
+    center: Point,
+    hovered: Option<Choice>,
+    active: Tool,
     current_color: [f32; 4],
     palette: &[[f32; 3]],
 ) -> Geometry {
     let mut buffers = lyon_tessellation::VertexBuffers::new();
     push_color_preview(&mut buffers, center, current_color);
-    let step = std::f32::consts::TAU / palette.len() as f32;
-    for (index, &[red, green, blue]) in palette.iter().enumerate() {
-        let selected = hovered == Some(index);
-        let outer = OUTER_RADIUS + if selected { HOVER_EXTENSION } else { 0.0 };
-        let start = index as f32 * step - step * 0.5;
-        let end = start + step;
-        push_wedge(
-            &mut buffers,
-            center,
-            INNER_RADIUS - WHEEL_BORDER_WIDTH,
-            outer + WHEEL_BORDER_WIDTH,
-            start..end,
-            0.0,
-            GAP_LINE_COLOR,
-        );
-        push_wedge(
-            &mut buffers,
-            center,
-            INNER_RADIUS,
-            outer,
-            start..end,
-            SEPARATOR_HALF_WIDTH,
-            [red, green, blue, 0.98],
-        );
-    }
-    Geometry::new(buffers)
-}
-
-pub(super) fn tool_palette_geometry(
-    center: Point,
-    hovered: Option<Tool>,
-    active: Tool,
-    current_color: [f32; 4],
-) -> Geometry {
-    let mut buffers = lyon_tessellation::VertexBuffers::new();
-    push_color_preview(&mut buffers, center, current_color);
     let step = std::f32::consts::TAU / TOOL_CHOICES.len() as f32;
     for (index, tool) in TOOL_CHOICES.iter().copied().enumerate() {
-        let is_hovered = hovered == Some(tool);
+        let is_hovered = hovered == Some(Choice::Tool(tool));
         let is_active = tool == active;
-        let outer = OUTER_RADIUS + if is_hovered { HOVER_EXTENSION } else { 0.0 };
+        let outer = TOOL_OUTER_RADIUS + if is_hovered { HOVER_EXTENSION } else { 0.0 };
         let start = index as f32 * step - step * 0.5;
         let end = start + step;
         push_wedge(
             &mut buffers,
             center,
-            INNER_RADIUS - WHEEL_BORDER_WIDTH,
+            TOOL_INNER_RADIUS - WHEEL_BORDER_WIDTH,
             outer + WHEEL_BORDER_WIDTH,
             start..end,
             0.0,
@@ -196,7 +205,7 @@ pub(super) fn tool_palette_geometry(
         push_wedge(
             &mut buffers,
             center,
-            INNER_RADIUS,
+            TOOL_INNER_RADIUS,
             outer,
             start..end,
             SEPARATOR_HALF_WIDTH,
@@ -209,11 +218,12 @@ pub(super) fn tool_palette_geometry(
             },
         );
         let icon_center = Point::new(
-            center.x + 60.0 * (index as f32 * step).cos(),
-            center.y + 60.0 * (index as f32 * step).sin(),
+            center.x + TOOL_ICON_RADIUS * (index as f32 * step).cos(),
+            center.y + TOOL_ICON_RADIUS * (index as f32 * step).sin(),
         );
         push_tool_icon(&mut buffers, icon_center, tool);
     }
+    push_palette(&mut buffers, center, hovered, palette);
     Geometry::new(buffers)
 }
 

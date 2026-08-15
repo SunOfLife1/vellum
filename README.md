@@ -26,8 +26,8 @@ Mod+A { spawn "vellum" "toggle"; }
 | Input | Action |
 | --- | --- |
 | Left drag | Draw or manipulate the selection |
-| Hold right click | Open the tool wheel |
-| Release right click in the center | Open the color wheel |
+| Hold right click, move, and release | Choose a tool or color |
+| Right click without moving | Keep the wheel open for click selection |
 | Middle drag | Erase annotations |
 | Mouse wheel | Change stroke width or text size |
 | `Ctrl` + wheel | Change opacity |
@@ -39,6 +39,9 @@ Mod+A { spawn "vellum" "toggle"; }
 | `Ctrl+A` | Select all annotations |
 | `Backspace` or `Delete` | Delete selected annotations |
 | `Escape` | Cancel, clear the selection, or leave drawing mode |
+
+When the wheel is left open, move without holding a button and left click a tool or color.
+Left clicking the center, right clicking again, or pressing `Escape` dismisses it.
 
 Drag selection handles to reshape supported elements. While drawing, `Shift` constrains geometry
 and `Alt` draws rectangles and ellipses from their center.

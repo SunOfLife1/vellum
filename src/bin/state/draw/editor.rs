@@ -1,7 +1,7 @@
 use super::Modifiers;
 use super::freehand;
 use super::history::{Entry as HistoryEntry, History};
-use super::picker::{Picker, palette_choice, palette_geometry, tool_choice, tool_palette_geometry};
+use super::picker::{Choice, Picker, choice, picker_geometry};
 use super::scene::{Element, HIT_SLOP, default_roundness, tessellate};
 use super::scene::{ElementId, ElementKind, EndMarker, Point, Style};
 use super::selection::{self, Handle};
@@ -557,18 +557,11 @@ impl Editor {
         }
     }
 
-    pub fn open_color_picker(&mut self, center: Point) -> Damage {
-        self.picker = Some(Picker::Color {
+    pub fn open_picker(&mut self, center: Point) -> Damage {
+        self.picker = Some(Picker {
             center,
             hovered: None,
-        });
-        Damage::Preview
-    }
-
-    pub fn open_tool_picker(&mut self, center: Point) -> Damage {
-        self.picker = Some(Picker::Tool {
-            center,
-            hovered: None,
+            engaged: false,
         });
         Damage::Preview
     }
@@ -577,38 +570,26 @@ impl Editor {
         let Some(picker) = &mut self.picker else {
             return Damage::None;
         };
-        let changed = match picker {
-            Picker::Color { center, hovered } => {
-                let choice = palette_choice(*center, point, self.palette.len());
-                let changed = *hovered != choice;
-                *hovered = choice;
-                changed
-            }
-            Picker::Tool { center, hovered } => {
-                let choice = tool_choice(*center, point);
-                let changed = *hovered != choice;
-                *hovered = choice;
-                changed
-            }
-        };
+        let choice = choice(picker.center, point, self.palette.len());
+        let changed = picker.hovered != choice;
+        picker.hovered = choice;
+        picker.engaged |= choice.is_some();
         Damage::from_preview(changed)
     }
 
-    pub fn picker_release(&mut self, point: Point) -> Damage {
-        let Some(picker) = self.picker.take() else {
+    pub fn picker_release(&mut self, point: Point, latch_center: bool) -> Damage {
+        let Some(picker) = self.picker else {
             return Damage::None;
         };
-        match picker {
-            Picker::Color { center, .. } => {
-                let Some(index) = palette_choice(center, point, self.palette.len()) else {
-                    return Damage::Preview;
-                };
-                Damage::Preview.max(self.apply_rgb(self.palette[index]))
-            }
-            Picker::Tool { center, .. } => match tool_choice(center, point) {
-                Some(tool) => Damage::Preview.max(self.switch_tool(tool)),
-                None => self.open_color_picker(center),
-            },
+        let choice = choice(picker.center, point, self.palette.len());
+        if choice.is_none() && latch_center && !picker.engaged {
+            return Damage::None;
+        }
+        self.picker = None;
+        match choice {
+            Some(Choice::Color(index)) => Damage::Preview.max(self.apply_rgb(self.palette[index])),
+            Some(Choice::Tool(tool)) => Damage::Preview.max(self.switch_tool(tool)),
+            None => Damage::Preview,
         }
     }
 
@@ -730,20 +711,14 @@ impl Editor {
     }
 
     pub fn picker_geometry(&self) -> Option<Geometry> {
-        match self.picker? {
-            Picker::Color { center, hovered } => Some(palette_geometry(
-                center,
-                hovered,
-                self.current_color(),
-                &self.palette,
-            )),
-            Picker::Tool { center, hovered } => Some(tool_palette_geometry(
-                center,
-                hovered,
-                self.tool,
-                self.current_color(),
-            )),
-        }
+        let picker = self.picker?;
+        Some(picker_geometry(
+            picker.center,
+            picker.hovered,
+            self.tool,
+            self.current_color(),
+            &self.palette,
+        ))
     }
 
     pub(super) fn active_text(&self) -> Option<&TextEdit> {

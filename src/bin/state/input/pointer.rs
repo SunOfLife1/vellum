@@ -150,7 +150,7 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                 if state.draw.picker_active() {
                     state.dismiss_picker();
                 } else if let Some(pos) = state.pointer.position {
-                    state.open_tool_picker(pos);
+                    state.open_picker(pos);
                 }
             }
             if middle_pressed && let Some(pos) = state.pointer.position {
@@ -183,16 +183,16 @@ impl Dispatch<WlPointer, (), State> for PointerState {
             if let Some(pos) = state.pointer.position {
                 if left_released {
                     if !state.pointer.left_button_in_picker || state.draw.picker_active() {
-                        state.pointer_up(pos, modifiers);
+                        state.pointer_up(pos, modifiers, false);
                     }
                     state.pointer.left_button_in_picker = false;
                     state.pointer.left_press_pos = None;
                 }
                 if right_released {
-                    state.pointer_up(pos, modifiers);
+                    state.pointer_up(pos, modifiers, true);
                 }
                 if middle_released {
-                    state.pointer_up(pos, modifiers);
+                    state.pointer_up(pos, modifiers, false);
                 }
                 if state.draw.picker_active() {
                     if sequence.vertical_axis_stopped {

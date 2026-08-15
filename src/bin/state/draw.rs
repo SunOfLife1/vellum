@@ -139,8 +139,8 @@ impl DrawState {
         self.editor.cursor_hint(point)
     }
 
-    pub fn open_tool_picker(&mut self, center: Point) -> bool {
-        let damage = self.editor.open_tool_picker(center);
+    pub fn open_picker(&mut self, center: Point) -> bool {
+        let damage = self.editor.open_picker(center);
         self.record(damage)
     }
 
@@ -149,8 +149,8 @@ impl DrawState {
         self.record(damage)
     }
 
-    pub fn picker_release(&mut self, point: Point) -> bool {
-        let damage = self.editor.picker_release(point);
+    pub fn picker_release(&mut self, point: Point, latch_center: bool) -> bool {
+        let damage = self.editor.picker_release(point, latch_center);
         self.record(damage)
     }
 
