@@ -29,6 +29,9 @@ Mod+A { spawn "vellum" "toggle"; }
 | Hold right click, move, and release | Choose a tool or color |
 | Right click without moving | Keep the wheel open for click selection |
 | Middle drag | Erase annotations |
+| Pen barrel button while hovering | Open the wheel |
+| Pen barrel button while drawing | Temporarily erase |
+| Pen eraser | Erase annotations |
 | Mouse wheel | Change stroke width or text size |
 | `Ctrl` + wheel | Change opacity |
 | `Shift` + wheel | Change roundness |

@@ -146,12 +146,8 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                     .map(|time| (time, pos))
                     .filter(|_| !double_click);
             }
-            if right_pressed {
-                if state.draw.picker_active() {
-                    state.dismiss_picker();
-                } else if let Some(pos) = state.pointer.position {
-                    state.open_picker(pos);
-                }
+            if right_pressed && let Some(pos) = state.pointer.position {
+                state.toggle_picker(pos);
             }
             if middle_pressed && let Some(pos) = state.pointer.position {
                 state.dismiss_picker();

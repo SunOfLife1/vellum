@@ -404,6 +404,14 @@ impl State {
         }
     }
 
+    fn toggle_picker(&mut self, pos: (f64, f64)) {
+        if self.draw.picker_active() {
+            self.dismiss_picker();
+        } else {
+            self.open_picker(pos);
+        }
+    }
+
     fn dismiss_picker(&mut self) {
         if self.draw.dismiss_picker() {
             self.request_render();

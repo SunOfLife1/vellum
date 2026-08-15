@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wayland_client::Connection;
 use wayland_client::Dispatch;
@@ -21,7 +21,8 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::EVT_TOOL_ADD
 
 use super::super::State;
 
-const ERASER_BUTTON: u32 = 331;
+const EVDEV_STYLUS: u32 = 331;
+const EVDEV_STYLUS2: u32 = 332;
 const PEN: u8 = 1;
 const BUTTON: u8 = 2;
 
@@ -31,6 +32,7 @@ pub(in crate::state) struct TabletState {
 
     _tablet_seat: Option<ZwpTabletSeatV2>,
     tablet_cursor_shape_devices: HashMap<ObjectId, WpCursorShapeDeviceV1>,
+    eraser_tools: HashSet<ObjectId>,
 
     pos: Option<(f64, f64)>,
     pen_held: bool,
@@ -89,13 +91,25 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
         _conn: &Connection,
         _qhandle: &QueueHandle<State>,
     ) {
-        use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::Event;
-        if matches!(&event, Event::Removed) {
-            state
-                .tablet
-                .tablet_cursor_shape_devices
-                .remove(&tablet_tool.id());
-            return;
+        use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::{Event, Type};
+        match &event {
+            Event::Removed => {
+                state
+                    .tablet
+                    .tablet_cursor_shape_devices
+                    .remove(&tablet_tool.id());
+                state.tablet.eraser_tools.remove(&tablet_tool.id());
+                return;
+            }
+            Event::Type {
+                tool_type: WEnum::Value(Type::Eraser),
+            } => {
+                state.tablet.eraser_tools.insert(tablet_tool.id());
+            }
+            Event::Type { .. } => {
+                state.tablet.eraser_tools.remove(&tablet_tool.id());
+            }
+            _ => {}
         }
         if let Some(sequence) = state.tablet.event_sequence.dispatch(event) {
             state.tablet.update_state(sequence);
@@ -103,6 +117,7 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
             let pen_released = sequence.released(PEN);
             let button_pressed = sequence.pressed(BUTTON);
             let button_released = sequence.released(BUTTON);
+            let eraser = state.tablet.eraser_tools.contains(&tablet_tool.id());
 
             if let Some(device) = state
                 .tablet
@@ -114,27 +129,41 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
             }
 
             let modifiers = state.modifiers();
-            if pen_pressed && let Some(pos) = state.tablet.pos {
-                state.pointer_down(pos, modifiers, state.tablet.button_held);
+            if button_pressed && let Some(pos) = state.tablet.pos {
+                if state.tablet.pen_held {
+                    state.pointer_up(pos, modifiers, false);
+                    state.pointer_down(pos, modifiers, true);
+                } else {
+                    state.toggle_picker(pos);
+                }
             }
-            if button_pressed
-                && state.tablet.pen_held
+            if pen_pressed
+                && !button_pressed
                 && let Some(pos) = state.tablet.pos
             {
-                state.pointer_up(pos, modifiers, false);
-                state.pointer_down(pos, modifiers, true);
+                if eraser {
+                    state.dismiss_picker();
+                }
+                state.pointer_down(pos, modifiers, eraser || state.tablet.button_held);
             }
             if button_released
                 && state.tablet.pen_held
+                && !pen_released
                 && let Some(pos) = state.tablet.pos
             {
                 state.pointer_up(pos, modifiers, false);
-                state.pointer_down(pos, modifiers, false);
+                state.pointer_down(pos, modifiers, eraser);
+            } else if button_released
+                && state.draw.picker_active()
+                && let Some(pos) = state.tablet.pos
+            {
+                state.pointer_up(pos, modifiers, true);
             }
             if !button_pressed
                 && !button_released
                 && sequence.motion.is_some()
-                && state.tablet.pen_held
+                && (state.tablet.pen_held
+                    || (state.draw.picker_active() && state.tablet.button_held))
                 && let Some(pos) = state.tablet.pos
             {
                 state.pointer_motion(pos, modifiers);
@@ -194,7 +223,7 @@ impl EventSequence {
                 state: button_state,
             } => {
                 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::ButtonState;
-                if button == ERASER_BUTTON {
+                if matches!(button, EVDEV_STYLUS | EVDEV_STYLUS2) {
                     match button_state {
                         WEnum::Value(ButtonState::Pressed) => self.pressed |= BUTTON,
                         WEnum::Value(ButtonState::Released) => self.released |= BUTTON,
