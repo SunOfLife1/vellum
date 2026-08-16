@@ -38,6 +38,9 @@ in {
         Description = "Vellum screen annotation overlay";
         After = ["graphical-session.target"];
         PartOf = ["graphical-session.target"];
+        X-Restart-Triggers = lib.mkIf (cfg.settings != {}) [
+          config.xdg.configFile."vellum/config.toml".source
+        ];
       };
       Service = {
         ExecStart = "${cfg.package}/bin/vellum";
