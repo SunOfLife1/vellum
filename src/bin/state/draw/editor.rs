@@ -48,6 +48,7 @@ pub(crate) enum Action {
     Undo,
     Redo,
     SelectAll,
+    ToggleEraser,
     Delete,
     Clear,
     Cancel,
@@ -135,6 +136,7 @@ pub struct Editor {
     default_width: f32,
     default_text_size: f32,
     default_tool: Tool,
+    last_non_eraser_tool: Tool,
     tool_properties: [ToolProperties; PROPERTY_COUNT],
     remember_last_tool: bool,
     palette: Vec<[f32; 3]>,
@@ -184,6 +186,11 @@ impl Editor {
             default_width: width,
             default_text_size: text_size,
             default_tool,
+            last_non_eraser_tool: if default_tool == Tool::Eraser {
+                Tool::Pen
+            } else {
+                default_tool
+            },
             tool_properties,
             remember_last_tool,
             palette,
@@ -283,6 +290,7 @@ impl Editor {
             Action::Undo if !self.is_editing_text() => effect.damage = self.undo(),
             Action::Redo if !self.is_editing_text() => effect.damage = self.redo(),
             Action::SelectAll => effect.damage = self.select_all(),
+            Action::ToggleEraser => effect.damage = self.toggle_eraser(),
             Action::Delete => {
                 if let Some(edit) = self.text_edit_mut() {
                     effect.damage = Damage::from_preview(edit.delete());
@@ -593,6 +601,15 @@ impl Editor {
 
     pub fn dismiss_picker(&mut self) -> Damage {
         Damage::from_preview(self.picker.take().is_some())
+    }
+
+    fn toggle_eraser(&mut self) -> Damage {
+        let tool = if self.tool == Tool::Eraser {
+            self.last_non_eraser_tool
+        } else {
+            Tool::Eraser
+        };
+        self.switch_tool(tool)
     }
 
     pub fn append_preview_geometry(&self, output: &mut Vec<Geometry>) {
@@ -1182,6 +1199,9 @@ impl Editor {
         let damage = self.finish_interaction().max(Damage::Preview);
         self.selected.clear();
         self.tool = tool;
+        if tool != Tool::Eraser {
+            self.last_non_eraser_tool = tool;
+        }
         if let Some((slot, _)) = tool.properties() {
             let properties = self.tool_properties[slot];
             if tool != Tool::Text {

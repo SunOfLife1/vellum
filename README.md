@@ -31,6 +31,7 @@ Mod+A { spawn "vellum" "toggle"; }
 | Left drag | Draw or manipulate the selection |
 | Right-click | Open the radial picker |
 | Hold right click, move, then release | Choose a tool or color |
+| Middle-click | Toggle eraser mode |
 | Middle drag | Erase annotations |
 | Mouse back button | Undo |
 | Mouse forward button | Redo |
@@ -41,7 +42,8 @@ Mod+A { spawn "vellum" "toggle"; }
 | Input | Action |
 | --- | --- |
 | One-finger drag | Draw or manipulate the selection |
-| Right click (usually two-finger click) | Open the radial picker |
+| Right click (two-finger click) | Open the radial picker |
+| Three-finger tap | Toggle eraser mode |
 | Two-finger scroll | Change stroke width or text size |
 
 ### Pen
