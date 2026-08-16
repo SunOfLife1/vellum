@@ -107,6 +107,13 @@ depends=('wayland' 'libxkbcommon' 'libglvnd' 'vulkan-icd-loader')
 makedepends=('cargo')
 ```
 
+### Debian 13+
+
+```sh
+sudo apt install build-essential git pkg-config rustup libwayland-dev libxkbcommon-dev libegl1 libvulkan1
+rustup default stable
+```
+
 ### Fedora
 
 ```sh
