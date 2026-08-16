@@ -1,6 +1,7 @@
 # Vellum
 
-`vellum` is a small native Wayland overlay for drawing directly over the live desktop, tested on niri.
+`vellum` is a small native Wayland overlay for drawing directly over the live desktop,
+tested on niri.
 
 https://github.com/user-attachments/assets/f8171063-16a8-497f-ba20-9e11bc50727e
 
@@ -23,40 +24,60 @@ Mod+A { spawn "vellum" "toggle"; }
 
 ## Controls
 
+### Mouse
+
 | Input | Action |
 | --- | --- |
 | Left drag | Draw or manipulate the selection |
-| Hold right click, move, and release | Choose a tool or color |
-| Short right click | Keep the wheel open for click selection |
+| Right-click | Open the radial picker |
+| Hold right click, move, then release | Choose a tool or color |
 | Middle drag | Erase annotations |
-| Pen barrel button while hovering | Open the wheel |
-| Pen barrel button while drawing | Temporarily erase |
-| Pen eraser | Erase annotations |
 | Mouse back button | Undo |
 | Mouse forward button | Redo |
 | Mouse wheel | Change stroke width or text size |
-| `Ctrl` + wheel | Change opacity |
-| `Shift` + wheel | Change roundness |
-| `Ctrl` + click in Select | Add or remove an annotation from the selection |
-| Double-click selected text | Edit it |
+
+### Trackpad
+
+| Input | Action |
+| --- | --- |
+| One-finger drag | Draw or manipulate the selection |
+| Right click (usually two-finger click) | Open the radial picker |
+| Two-finger scroll | Change stroke width or text size |
+
+### Pen
+
+| Input | Action |
+| --- | --- |
+| Drag with the pen tip | Draw or manipulate the selection |
+| Briefly press the barrel button while hovering | Open the radial picker |
+| Hold the barrel button while hovering, move, then release | Choose a tool or color |
+| Hold the barrel button while drawing | Temporarily erase until released |
+| Drag with the eraser tip | Erase annotations |
+
+### Shortcuts and modifiers
+
+| Input | Action |
+| --- | --- |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
 | `Ctrl+A` | Select all annotations |
 | `Backspace` or `Delete` | Delete selected annotations |
 | `Escape` | Cancel, clear the selection, or leave drawing mode |
+| `Ctrl` + click in selection mode | Add or remove an annotation from the selection |
+| Double-click selected text | Edit it |
+| `Shift` while drawing | Constrain the shape |
+| `Alt` while drawing | Draw rectangles and ellipses from their center |
+| `Ctrl` + scroll | Change opacity |
+| `Shift` + scroll | Change roundness |
 
-When the wheel is left open, move without holding a button and left click a tool or color.
-Left clicking the center, right clicking again, or pressing `Escape` dismisses it.
+Drag selection handles to reshape supported elements.
 
-Drag selection handles to reshape supported elements. While drawing, `Shift` constrains geometry
-and `Alt` draws rectangles and ellipses from their center.
-
-Run `vellum --help` for startup options and commands. Packaged releases also provide
-`man vellum` with the same command-line reference.
+Run `vellum --help` or `man vellum` for startup options and commands.
 
 ## Configuration
 
-See [Configuration](docs/configuration.md) for the available options, defaults, and file lookup order.
+See [Configuration](docs/configuration.md) for the available options, defaults, and file lookup
+order.
 
 ## Home Manager
 
