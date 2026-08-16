@@ -67,9 +67,6 @@ impl Settings {
             .to_ascii_lowercase()
             .parse()?;
 
-        let color_text = file.default_color.unwrap_or_else(|| "#FF0000".into());
-        let stroke_color = parse_named_color("default_color", &color_text)?;
-
         let palette_text = file
             .palette
             .unwrap_or_else(|| DEFAULT_PALETTE.iter().map(ToString::to_string).collect());
@@ -80,7 +77,17 @@ impl Settings {
             .iter()
             .enumerate()
             .map(|(index, color)| parse_named_color(&format!("palette[{index}]"), color))
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
+        let stroke_color = match file.default_color {
+            Some(color) => {
+                let color = parse_named_color("default_color", &color)?;
+                if !palette.contains(&color) {
+                    return Err("default_color must be present in palette".into());
+                }
+                color
+            }
+            None => palette[0],
+        };
 
         let feedback_duration_ms = file.feedback_duration_ms.unwrap_or(500);
         if feedback_duration_ms > 60_000 {
