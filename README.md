@@ -92,8 +92,17 @@ order.
 
 ### Arch
 
+For a manual build:
+
 ```sh
 sudo pacman -S --needed base-devel git rust wayland libxkbcommon libglvnd vulkan-icd-loader
+```
+
+For a PKGBUILD:
+
+```bash
+depends=('wayland' 'libxkbcommon' 'libglvnd' 'vulkan-icd-loader')
+makedepends=('cargo')
 ```
 
 ### Fedora
