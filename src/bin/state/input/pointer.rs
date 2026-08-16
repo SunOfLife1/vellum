@@ -25,6 +25,7 @@ const RIGHT: u8 = 2;
 const MIDDLE: u8 = 4;
 const UNDO: u8 = 8;
 const REDO: u8 = 16;
+const CLICK_SLOP_SQUARED: f64 = 36.0;
 
 #[derive(Default)]
 pub(in crate::state) struct PointerState {
@@ -40,6 +41,8 @@ pub(in crate::state) struct PointerState {
     left_button_in_picker: bool,
     left_press_pos: Option<(f64, f64)>,
     right_press_time: Option<u32>,
+    middle_press: Option<(u32, (f64, f64))>,
+    middle_dragging: bool,
     last_left_click: Option<(u32, (f64, f64))>,
     scroll_remainder: f64,
 }
@@ -57,13 +60,15 @@ impl PointerState {
     }
 
     pub(in crate::state) fn cancel_gesture(&mut self) -> bool {
-        let interaction_active = self.left_button_held || self.middle_button_held;
+        let interaction_active = self.left_button_held || self.middle_dragging;
         self.left_button_held = false;
         self.right_button_held = false;
         self.middle_button_held = false;
         self.left_button_in_picker = false;
         self.left_press_pos = None;
         self.right_press_time = None;
+        self.middle_press = None;
+        self.middle_dragging = false;
         self.last_left_click = None;
         self.scroll_remainder = 0.0;
         interaction_active
@@ -151,7 +156,7 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                             .last_left_click
                             .is_some_and(|(previous, previous_pos)| {
                                 time.wrapping_sub(previous) <= 400
-                                    && distance_squared(pos, previous_pos) <= 36.0
+                                    && distance_squared(pos, previous_pos) <= CLICK_SLOP_SQUARED
                             })
                     });
                 if !double_click || !state.double_click_at(pos) {
@@ -168,7 +173,9 @@ impl Dispatch<WlPointer, (), State> for PointerState {
             }
             if middle_pressed && let Some(pos) = state.pointer.position {
                 state.dismiss_picker();
-                state.pointer_down(pos, modifiers, true);
+                if let Some(time) = sequence.middle_button_time {
+                    state.pointer.middle_press = Some((time, pos));
+                }
             }
             if sequence.motion.is_some()
                 && let Some(pos) = state.pointer.position
@@ -178,14 +185,22 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                     && state
                         .pointer
                         .left_press_pos
-                        .is_some_and(|start| distance_squared(pos, start) > 36.0)
+                        .is_some_and(|start| distance_squared(pos, start) > CLICK_SLOP_SQUARED)
                 {
                     state.pointer.last_left_click = None;
+                }
+                if (state.pointer.middle_button_held || middle_released)
+                    && !state.pointer.middle_dragging
+                    && let Some((_, start)) = state.pointer.middle_press
+                    && distance_squared(pos, start) > CLICK_SLOP_SQUARED
+                {
+                    state.pointer.middle_dragging = true;
+                    state.pointer_down(start, modifiers, true);
                 }
                 if (state.draw.picker_active()
                     || state.pointer.left_button_held
                     || state.pointer.right_button_held
-                    || state.pointer.middle_button_held)
+                    || state.pointer.middle_dragging)
                     && !left_pressed
                     && !right_pressed
                     && !middle_pressed
@@ -209,7 +224,15 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                     state.pointer_up(pos, modifiers, latch_picker);
                 }
                 if middle_released {
-                    state.pointer_up(pos, modifiers, false);
+                    let dragging = std::mem::take(&mut state.pointer.middle_dragging);
+                    let clicked = state.pointer.middle_press.take().is_some_and(|(time, _)| {
+                        short_click(Some(time), sequence.middle_button_time)
+                    });
+                    if dragging {
+                        state.pointer_up(pos, modifiers, false);
+                    } else if clicked {
+                        state.apply_action(Action::ToggleEraser);
+                    }
                 }
                 if state.draw.picker_active() {
                     if sequence.vertical_axis_stopped {
@@ -245,6 +268,7 @@ struct EventSequence {
     released: u8,
     left_press_time: Option<u32>,
     right_button_time: Option<u32>,
+    middle_button_time: Option<u32>,
     axis_vertical: f64,
     axis_discrete: i32,
     axis_value120: i32,
@@ -324,6 +348,9 @@ impl EventSequence {
                 }
                 if mask == RIGHT {
                     self.right_button_time = Some(time);
+                }
+                if mask == MIDDLE {
+                    self.middle_button_time = Some(time);
                 }
                 None
             }
