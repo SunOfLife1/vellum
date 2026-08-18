@@ -15,6 +15,7 @@ const HANDLE_FILL: [f32; 4] = [0.04, 0.04, 0.04, 1.0];
 pub(super) enum Handle {
     Start,
     End,
+    Vertex(usize),
     Corner(Corner),
     Edge(Edge),
 }
@@ -52,7 +53,7 @@ pub(super) fn cursor(handle: Handle) -> CursorHint {
         Handle::Corner(Corner::TopRight | Corner::BottomLeft) => CursorHint::NeswResize,
         Handle::Edge(Edge::Top | Edge::Bottom) => CursorHint::NsResize,
         Handle::Edge(Edge::Left | Edge::Right) => CursorHint::EwResize,
-        Handle::Start | Handle::End => CursorHint::Crosshair,
+        Handle::Start | Handle::End | Handle::Vertex(_) => CursorHint::Crosshair,
     }
 }
 
@@ -62,19 +63,35 @@ pub(super) fn hit_handle(
     bounds: Bounds,
     point: Point,
 ) -> Option<Handle> {
-    rendered_path_endpoints(kind, style)
-        .and_then(|[start, end]| {
-            let radius_squared = ENDPOINT_HIT_RADIUS * ENDPOINT_HIT_RADIUS;
-            let start_distance = start.distance_squared(point);
-            let end_distance = end.distance_squared(point);
-            let (handle, distance) = if start_distance < end_distance {
-                (Handle::Start, start_distance)
-            } else {
-                (Handle::End, end_distance)
-            };
-            (distance <= radius_squared).then_some(handle)
+    triangle_vertex_handle(kind, style, point)
+        .or_else(|| {
+            rendered_path_endpoints(kind, style).and_then(|[start, end]| {
+                let radius_squared = ENDPOINT_HIT_RADIUS * ENDPOINT_HIT_RADIUS;
+                let start_distance = start.distance_squared(point);
+                let end_distance = end.distance_squared(point);
+                let (handle, distance) = if start_distance < end_distance {
+                    (Handle::Start, start_distance)
+                } else {
+                    (Handle::End, end_distance)
+                };
+                (distance <= radius_squared).then_some(handle)
+            })
         })
         .or_else(|| outline_handle(kind, bounds, point))
+}
+
+fn triangle_vertex_handle(kind: &ElementKind, style: Style, point: Point) -> Option<Handle> {
+    let ElementKind::Triangle { vertices } = kind else {
+        return None;
+    };
+    let radius_squared = ENDPOINT_HIT_RADIUS * ENDPOINT_HIT_RADIUS;
+    super::triangle::rendered_vertices(vertices, style.roundness)
+        .iter()
+        .enumerate()
+        .map(|(index, vertex)| (index, vertex.distance_squared(point)))
+        .filter(|(_, distance)| *distance <= radius_squared)
+        .min_by(|(_, first), (_, second)| first.total_cmp(second))
+        .map(|(index, _)| Handle::Vertex(index))
 }
 
 pub(super) fn outline(min: Point, max: Point) -> Geometry {
@@ -92,6 +109,14 @@ pub(super) fn outline(min: Point, max: Point) -> Geometry {
 }
 
 pub(super) fn append_handles(kind: &ElementKind, style: Style, output: &mut Vec<Geometry>) {
+    if let ElementKind::Triangle { vertices } = kind {
+        output.extend(
+            super::triangle::rendered_vertices(vertices, style.roundness)
+                .into_iter()
+                .map(endpoint_geometry),
+        );
+        return;
+    }
     if let Some([start, end]) = rendered_path_endpoints(kind, style) {
         let start_geometry = endpoint_geometry(start);
         let end_geometry = start_geometry.translated([end.x - start.x, end.y - start.y]);
@@ -172,9 +197,18 @@ pub(super) fn resize(
     original: &ElementKind,
     handle: Handle,
     delta: Point,
+    roundness: f32,
     modifiers: Modifiers,
+    equal_side_anchor: &mut Option<usize>,
 ) -> ElementKind {
     match (original, handle) {
+        (ElementKind::Triangle { vertices }, Handle::Vertex(index)) if index < vertices.len() => {
+            let mut vertices = *vertices;
+            let target = super::triangle::dragged_vertex(&vertices, index, delta, roundness);
+            vertices[index] =
+                constrained_triangle_vertex(vertices, index, target, modifiers, equal_side_anchor);
+            ElementKind::Triangle { vertices }
+        }
         (
             ElementKind::Path {
                 points,
@@ -291,7 +325,7 @@ fn handle_position(min: Point, max: Point, handle: Handle) -> Point {
         Handle::Edge(Edge::Right) => Point::new(max.x, (min.y + max.y) * 0.5),
         Handle::Edge(Edge::Bottom) => Point::new((min.x + max.x) * 0.5, max.y),
         Handle::Edge(Edge::Left) => Point::new(min.x, (min.y + max.y) * 0.5),
-        Handle::Start | Handle::End => unreachable!(),
+        Handle::Start | Handle::End | Handle::Vertex(_) => unreachable!(),
     }
 }
 
@@ -319,6 +353,123 @@ pub(super) fn constrained_endpoint(start: Point, end: Point, snap: bool) -> Poin
         start.x + distance * angle.cos(),
         start.y + distance * angle.sin(),
     )
+}
+
+fn constrained_triangle_vertex(
+    vertices: [Point; 3],
+    index: usize,
+    target: Point,
+    modifiers: Modifiers,
+    equal_side_anchor: &mut Option<usize>,
+) -> Point {
+    if !modifiers.shift && !modifiers.alt {
+        return target;
+    }
+    let first = vertices[(index + 1) % 3];
+    let second = vertices[(index + 2) % 3];
+    let edge = second - first;
+    let edge_length = edge.length();
+    if edge_length <= f32::EPSILON {
+        return target;
+    }
+    let midpoint = first.midpoint(second);
+    let normal = Point::new(-edge.y / edge_length, edge.x / edge_length);
+
+    let project_to_line = |origin: Point, direction: Point| {
+        let offset = target - origin;
+        origin + direction * (offset.x * direction.x + offset.y * direction.y)
+    };
+    match (modifiers.shift, modifiers.alt) {
+        (true, false) => nearest_point(
+            target,
+            [first, second, midpoint].map(|origin| project_to_line(origin, normal)),
+        ),
+        (false, true) => {
+            let center_index =
+                latched_equal_side(vertices, index, target, edge_length, equal_side_anchor);
+            let center = vertices[center_index];
+            let offset = target - center;
+            let distance = offset.length();
+            if distance <= f32::EPSILON {
+                target
+            } else {
+                center + offset * (edge_length / distance)
+            }
+        }
+        (true, true) => {
+            let equilateral_height = edge_length * 3.0_f32.sqrt() * 0.5;
+            let right_isosceles_height = edge_length * 0.5;
+            nearest_point(
+                target,
+                [
+                    midpoint + normal * equilateral_height,
+                    midpoint - normal * equilateral_height,
+                    midpoint + normal * right_isosceles_height,
+                    midpoint - normal * right_isosceles_height,
+                    first + normal * edge_length,
+                    first - normal * edge_length,
+                    second + normal * edge_length,
+                    second - normal * edge_length,
+                ],
+            )
+        }
+        (false, false) => unreachable!(),
+    }
+}
+
+fn nearest_point<const N: usize>(target: Point, candidates: [Point; N]) -> Point {
+    candidates
+        .into_iter()
+        .min_by(|first, second| {
+            first
+                .distance_squared(target)
+                .total_cmp(&second.distance_squared(target))
+        })
+        .unwrap_or(target)
+}
+
+fn latched_equal_side(
+    vertices: [Point; 3],
+    index: usize,
+    target: Point,
+    edge_length: f32,
+    equal_side_anchor: &mut Option<usize>,
+) -> usize {
+    *equal_side_anchor.get_or_insert_with(|| {
+        let first_index = (index + 1) % 3;
+        let second_index = (index + 2) % 3;
+        let first_distance = ((target - vertices[first_index]).length() - edge_length).abs();
+        let second_distance = ((target - vertices[second_index]).length() - edge_length).abs();
+        if first_distance <= second_distance {
+            first_index
+        } else {
+            second_index
+        }
+    })
+}
+
+pub(super) fn triangle_from_drag(start: Point, current: Point, modifiers: Modifiers) -> [Point; 3] {
+    if modifiers.alt {
+        let vertex = constrained_endpoint(start, current, modifiers.shift);
+        let radius = vertex - start;
+        let (sin, cos) = (std::f32::consts::TAU / 3.0).sin_cos();
+        let rotate = |sin: f32| {
+            Point::new(
+                start.x + radius.x * cos - radius.y * sin,
+                start.y + radius.x * sin + radius.y * cos,
+            )
+        };
+        return [vertex, rotate(sin), rotate(-sin)];
+    }
+    let base = constrained_endpoint(start, current, modifiers.shift);
+    let axis = base - start;
+    let height = axis.length();
+    if height <= f32::EPSILON {
+        return [start; 3];
+    }
+    let half_base = height / 3.0_f32.sqrt();
+    let normal = Point::new(-axis.y / height, axis.x / height) * half_base;
+    [start, base + normal, base - normal]
 }
 
 pub(super) fn constrained_box(

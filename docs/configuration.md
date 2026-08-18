@@ -9,7 +9,7 @@ to load no file.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `default_tool` | string | `"pen"` | Tool selected on startup: `pen`, `line`, `arrow`, `rectangle`, `ellipse`, `text`, `eraser`, or `select` |
+| `default_tool` | string | `"pen"` | Tool selected on startup: `pen`, `line`, `arrow`, `triangle`, `rectangle`, `ellipse`, `text`, `eraser`, or `select` |
 | `remember_last_tool` | boolean | `true` | Keep the selected tool when drawing mode is reopened |
 | `stroke_width` | number | `5.0` | Initial size for pen and shape tools; each keeps its own adjusted size during the session |
 | `default_color` | string | First palette color | Initial `#RRGGBB` color; must be present in `palette` |

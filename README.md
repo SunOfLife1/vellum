@@ -68,7 +68,7 @@ Mod+A { spawn "vellum" "toggle"; }
 | `Ctrl` + click in selection mode | Add or remove an annotation from the selection |
 | Double-click selected text | Edit it |
 | `Shift` while drawing | Constrain the shape |
-| `Alt` while drawing | Draw rectangles and ellipses from their center |
+| `Alt` while drawing | Draw triangles, rectangles, and ellipses from their center |
 | `Ctrl` + scroll | Change opacity |
 | `Shift` + scroll | Change roundness |
 

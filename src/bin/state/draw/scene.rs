@@ -117,6 +117,9 @@ pub enum ElementKind {
         smooth: bool,
         end_marker: Option<EndMarker>,
     },
+    Triangle {
+        vertices: [Point; 3],
+    },
     Rectangle {
         min: Point,
         max: Point,
@@ -141,6 +144,9 @@ impl ElementKind {
                     .iter_mut()
                     .for_each(|point| *point = point.translated(delta));
             }
+            Self::Triangle { vertices } => vertices
+                .iter_mut()
+                .for_each(|point| *point = point.translated(delta)),
             Self::Rectangle { min, max } => {
                 *min = min.translated(delta);
                 *max = max.translated(delta);
@@ -173,7 +179,7 @@ impl Element {
         style: Style,
         geometry: Geometry,
     ) -> Self {
-        let bounds = bounds_for(&kind, style.width);
+        let bounds = bounds_for(&kind, style);
         Self {
             id,
             kind,
@@ -186,7 +192,7 @@ impl Element {
     pub(super) fn replace(&mut self, kind: ElementKind, style: Style) -> (ElementKind, Style) {
         let kind = std::mem::replace(&mut self.kind, kind);
         let style = std::mem::replace(&mut self.style, style);
-        self.bounds = bounds_for(&self.kind, self.style.width);
+        self.bounds = bounds_for(&self.kind, self.style);
         self.geometry = geometry(&self.kind, self.style);
         (kind, style)
     }
@@ -217,7 +223,7 @@ impl Element {
                     max: self.bounds.max.translated(delta),
                 }
             }
-            _ => bounds_for(kind, self.style.width),
+            _ => bounds_for(kind, self.style),
         }
     }
 
@@ -262,6 +268,9 @@ impl Element {
                     )
                 }
             }
+            ElementKind::Triangle { vertices } => {
+                super::triangle::hit_test(vertices, self.style, point, HIT_SLOP)
+            }
             ElementKind::Rectangle { min, max } => {
                 rounded_rectangle_hit(*min, *max, self.style.roundness, point, tolerance)
             }
@@ -279,7 +288,11 @@ impl Element {
     }
 }
 
-pub(super) fn bounds_for(kind: &ElementKind, width: f32) -> Bounds {
+pub(super) fn bounds_for(kind: &ElementKind, style: Style) -> Bounds {
+    if let ElementKind::Triangle { vertices } = kind {
+        return super::triangle::bounds(vertices, style);
+    }
+    let width = style.width;
     let bounds = match kind {
         ElementKind::Path {
             points,
@@ -293,6 +306,7 @@ pub(super) fn bounds_for(kind: &ElementKind, width: f32) -> Bounds {
             },
         ),
         ElementKind::Path { points, .. } => Bounds::from_points(points.iter().copied()),
+        ElementKind::Triangle { .. } => unreachable!(),
         ElementKind::Rectangle { min, max } => Bounds {
             min: *min,
             max: *max,
@@ -332,6 +346,9 @@ pub(super) fn geometry(kind: &ElementKind, style: Style) -> Geometry {
     }
     if let ElementKind::Rectangle { min, max } = kind {
         return rectangle_geometry(*min, *max, style);
+    }
+    if let ElementKind::Triangle { vertices } = kind {
+        return super::triangle::geometry(vertices, style);
     }
     let marker = match kind {
         ElementKind::Path {
@@ -374,6 +391,7 @@ pub(super) fn geometry(kind: &ElementKind, style: Style) -> Geometry {
             }
         }
         ElementKind::Path { smooth: true, .. } => unreachable!(),
+        ElementKind::Triangle { .. } => unreachable!(),
         ElementKind::Rectangle { .. } => unreachable!(),
         ElementKind::Ellipse { center, radii } => {
             path = kurbo::Ellipse::new(
@@ -526,6 +544,7 @@ pub(super) fn default_roundness(kind: &ElementKind) -> Option<f32> {
             ..
         } => Some(Tool::ARROW_ROUNDNESS),
         ElementKind::Path { .. } => Some(Tool::LINE_ROUNDNESS),
+        ElementKind::Triangle { .. } => Some(Tool::TRIANGLE_ROUNDNESS),
         ElementKind::Rectangle { .. } => Some(Tool::RECTANGLE_ROUNDNESS),
         _ => None,
     }

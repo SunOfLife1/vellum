@@ -6,6 +6,7 @@ mod scene;
 mod selection;
 mod text_edit;
 mod tool;
+mod triangle;
 
 use crate::render::{FillRule, Geometry, LocalGeometry, TextSpec, WgpuState};
 use std::time::{Duration, Instant};

@@ -16,7 +16,7 @@ const MIN_OPACITY: f32 = 0.05;
 const MIN_FONT_SIZE: f32 = 8.0;
 const MAX_FONT_SIZE: f32 = 192.0;
 const DEFAULT_TEXT_SIZE: f32 = 20.0;
-const PROPERTY_COUNT: usize = 6;
+const PROPERTY_COUNT: usize = 7;
 const TEXT_SLOT: usize = PROPERTY_COUNT - 1;
 
 fn stroke_size_label(value: f32, default: f32) -> String {
@@ -78,8 +78,10 @@ enum Interaction {
         id: ElementId,
         handle: Handle,
         start: Point,
+        roundness: f32,
         original: ElementKind,
         current: ElementKind,
+        equal_side_anchor: Option<usize>,
     },
     EditingText(TextEdit),
     Erasing,
@@ -157,6 +159,7 @@ impl Editor {
             Tool::PEN_ROUNDNESS,
             Tool::LINE_ROUNDNESS,
             Tool::ARROW_ROUNDNESS,
+            Tool::TRIANGLE_ROUNDNESS,
             Tool::RECTANGLE_ROUNDNESS,
             0.0,
             0.0,
@@ -354,7 +357,7 @@ impl Editor {
                 )));
                 previous.max(Damage::Preview)
             }
-            Tool::Line | Tool::Arrow | Tool::Rectangle | Tool::Ellipse => {
+            Tool::Line | Tool::Arrow | Tool::Triangle | Tool::Rectangle | Tool::Ellipse => {
                 self.interaction = Some(Interaction::Drawing {
                     tool: self.tool,
                     start: point,
@@ -387,8 +390,10 @@ impl Editor {
                         id,
                         handle,
                         start: point,
+                        roundness: element.style.roundness,
                         current: original.clone(),
                         original,
+                        equal_side_anchor: None,
                     });
                     return Damage::Scene;
                 }
@@ -469,16 +474,27 @@ impl Editor {
                 id,
                 handle,
                 start,
+                roundness,
                 original,
+                mut equal_side_anchor,
                 ..
             }) => {
-                let current = selection::resize(&original, handle, point - start, modifiers);
+                let current = selection::resize(
+                    &original,
+                    handle,
+                    point - start,
+                    roundness,
+                    modifiers,
+                    &mut equal_side_anchor,
+                );
                 self.interaction = Some(Interaction::Resizing {
                     id,
                     handle,
                     start,
+                    roundness,
                     original,
                     current,
+                    equal_side_anchor,
                 });
                 Damage::Preview
             }
@@ -543,10 +559,19 @@ impl Editor {
                 id,
                 handle,
                 start,
+                roundness,
                 original,
+                mut equal_side_anchor,
                 ..
             }) => {
-                let current = selection::resize(&original, handle, point - start, modifiers);
+                let current = selection::resize(
+                    &original,
+                    handle,
+                    point - start,
+                    roundness,
+                    modifiers,
+                    &mut equal_side_anchor,
+                );
                 if current != original
                     && let Some(element) = self.element_mut(id)
                 {
@@ -715,7 +740,10 @@ impl Editor {
             _ => None,
         };
         let kind = preview.as_ref().unwrap_or(&element.kind);
-        if !matches!(kind, ElementKind::Path { smooth: false, .. }) {
+        if !matches!(
+            kind,
+            ElementKind::Path { smooth: false, .. } | ElementKind::Triangle { .. }
+        ) {
             let bounds = element.preview_bounds(kind);
             output.push(selection::outline(bounds.min, bounds.max));
         }
@@ -727,10 +755,15 @@ impl Editor {
 
     pub fn picker_geometry(&self) -> Option<crate::render::LocalGeometry> {
         let picker = self.picker?;
+        let active = if self.tool == Tool::Eraser {
+            self.last_non_eraser_tool
+        } else {
+            self.tool
+        };
         Some(picker_geometry(
             picker.center,
             picker.hovered,
-            self.tool,
+            active,
             self.current_color(),
             &self.palette,
         ))
@@ -1231,6 +1264,9 @@ fn drawing_kind(tool: Tool, start: Point, current: Point, modifiers: Modifiers) 
             ],
             smooth: false,
             end_marker: (tool == Tool::Arrow).then_some(EndMarker::Arrow),
+        },
+        Tool::Triangle => ElementKind::Triangle {
+            vertices: selection::triangle_from_drag(start, current, modifiers),
         },
         Tool::Rectangle => {
             let (min, max) =

@@ -36,11 +36,11 @@ const TOOL_CHOICES: [Tool; 8] = [
     Tool::Pen,
     Tool::Line,
     Tool::Arrow,
+    Tool::Triangle,
     Tool::Rectangle,
     Tool::Ellipse,
-    Tool::Text,
     Tool::Select,
-    Tool::Eraser,
+    Tool::Text,
 ];
 
 pub(super) fn choice(center: Point, point: Point, color_count: usize) -> Option<Choice> {
@@ -282,6 +282,12 @@ fn push_tool_icon(output: &mut Geometry, center: Point, tool: Tool) {
             path.move_to(p(7.0, 17.0));
             path.line_to(p(17.0, 7.0));
         }
+        Tool::Triangle => {
+            path.move_to(p(12.0, 3.0));
+            path.line_to(p(21.0, 20.0));
+            path.line_to(p(3.0, 20.0));
+            path.close_path();
+        }
         Tool::Rectangle => {
             path.move_to(p(5.0, 3.0));
             path.line_to(p(19.0, 3.0));
@@ -313,17 +319,7 @@ fn push_tool_icon(output: &mut Geometry, center: Point, tool: Tool) {
             path.line_to(p(12.0, 20.7));
             path.close_path();
         }
-        Tool::Eraser => {
-            path.move_to(p(5.1, 11.1));
-            path.line_to(p(12.6, 3.6));
-            path.line_to(p(21.4, 12.4));
-            path.line_to(p(12.8, 21.0));
-            path.line_to(p(8.0, 21.0));
-            path.line_to(p(2.6, 15.6));
-            path.close_path();
-            path.move_to(p(5.1, 11.1));
-            path.line_to(p(13.9, 19.9));
-        }
+        Tool::Eraser => unreachable!("eraser is not a radial choice"),
     }
     output.append(Geometry::stroke(
         path,
