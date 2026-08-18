@@ -7,7 +7,7 @@ mod selection;
 mod text_edit;
 mod tool;
 
-use crate::render::{Geometry, TextSpec, Vertex, WgpuState};
+use crate::render::{Geometry, LocalGeometry, TextSpec, Vertex, WgpuState};
 use std::time::{Duration, Instant};
 
 pub(crate) use self::editor::{Action, CursorMove};
@@ -36,7 +36,7 @@ pub struct DrawState {
     caret_visible: bool,
     caret_until: Option<Instant>,
     previews: Vec<Geometry>,
-    overlays: Vec<Geometry>,
+    picker: Option<LocalGeometry>,
 }
 
 impl DrawState {
@@ -64,7 +64,7 @@ impl DrawState {
             caret_visible: true,
             caret_until: None,
             previews: Vec::new(),
-            overlays: Vec::new(),
+            picker: None,
         }
     }
 
@@ -307,9 +307,8 @@ impl DrawState {
         self.editor.append_preview_geometry(&mut self.previews);
         self.editor
             .append_selection_geometry(self.property_feedback_anchor.is_none(), &mut self.previews);
-        self.overlays.clear();
-        self.overlays.extend(self.editor.picker_geometry());
-        if wgpu.render(&self.previews, &self.overlays) {
+        self.picker = self.editor.picker_geometry();
+        if wgpu.render(&self.previews, self.picker.as_ref()) {
             self.damage = Damage::None;
         }
     }

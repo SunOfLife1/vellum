@@ -725,7 +725,7 @@ impl Editor {
         selection::append_handles(kind, element.style, output);
     }
 
-    pub fn picker_geometry(&self) -> Option<Geometry> {
+    pub fn picker_geometry(&self) -> Option<crate::render::LocalGeometry> {
         let picker = self.picker?;
         Some(picker_geometry(
             picker.center,

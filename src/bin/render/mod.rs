@@ -14,10 +14,34 @@ use wgpu::util::DeviceExt;
 
 const INITIAL_BUFFER_SIZE: u64 = 4096;
 const RENDER_SCALE: u32 = 2;
+const PICKER_RENDER_SCALE: u32 = 4;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ResolveInfo {
+    origin: [f32; 2],
+    _padding: [f32; 2],
+}
 
 #[derive(Debug)]
 pub struct Geometry {
     vertex_buffers: VertexBuffers<Vertex, u32>,
+}
+
+pub struct LocalGeometry {
+    geometry: Geometry,
+    origin: [f32; 2],
+    size: [u32; 2],
+}
+
+impl LocalGeometry {
+    pub fn new(geometry: Geometry, origin: [f32; 2], size: [u32; 2]) -> Self {
+        Self {
+            geometry,
+            origin,
+            size,
+        }
+    }
 }
 
 impl Geometry {
@@ -77,30 +101,50 @@ struct RenderTarget {
     _texture: wgpu::Texture,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
+    resolve_buffer: wgpu::Buffer,
+}
+
+struct PickerRenderTarget {
+    target: RenderTarget,
+    _screen_buffer: wgpu::Buffer,
+    screen_bind_group: wgpu::BindGroup,
+    size: [u32; 2],
+    origin: [f32; 2],
 }
 
 impl RenderTarget {
     fn new(
         device: &wgpu::Device,
-        config: &wgpu::SurfaceConfiguration,
+        format: wgpu::TextureFormat,
+        size: [u32; 2],
+        scale: u32,
+        origin: [f32; 2],
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
     ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("supersampled annotations"),
             size: wgpu::Extent3d {
-                width: config.width * RENDER_SCALE,
-                height: config.height * RENDER_SCALE,
+                width: size[0] * scale,
+                height: size[1] * scale,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: config.format,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let resolve_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("downsample dimensions"),
+            contents: bytemuck::bytes_of(&ResolveInfo {
+                origin,
+                _padding: [0.0; 2],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("supersampled annotations"),
             layout,
@@ -113,12 +157,60 @@ impl RenderTarget {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: resolve_buffer.as_entire_binding(),
+                },
             ],
         });
         Self {
             _texture: texture,
             view,
             bind_group,
+            resolve_buffer,
+        }
+    }
+}
+
+impl PickerRenderTarget {
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        size: [u32; 2],
+        origin: [f32; 2],
+        screen_layout: &wgpu::BindGroupLayout,
+        downsample_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+    ) -> Self {
+        let screen_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("picker dimensions"),
+            contents: bytemuck::bytes_of(&Uniform {
+                screen_size: [size[0] as f32, size[1] as f32],
+            }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let screen_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("picker dimensions"),
+            layout: screen_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: screen_buffer.as_entire_binding(),
+            }],
+        });
+        Self {
+            target: RenderTarget::new(
+                device,
+                format,
+                size,
+                PICKER_RENDER_SCALE,
+                origin,
+                downsample_layout,
+                sampler,
+            ),
+            _screen_buffer: screen_buffer,
+            screen_bind_group,
+            size,
+            origin,
         }
     }
 }
@@ -159,9 +251,12 @@ pub struct WgpuState {
     queue: wgpu::Queue,
     render_pipeline: wgpu::RenderPipeline,
     downsample_pipeline: wgpu::RenderPipeline,
+    picker_downsample_pipeline: wgpu::RenderPipeline,
     downsample_layout: wgpu::BindGroupLayout,
     downsample_sampler: wgpu::Sampler,
+    screen_layout: wgpu::BindGroupLayout,
     render_target: Option<RenderTarget>,
+    picker_render_target: Option<PickerRenderTarget>,
     committed_vertices: GrowingBuffer,
     committed_indices: GrowingBuffer,
     committed_index_count: u32,
@@ -334,6 +429,16 @@ impl WgpuState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let downsample_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -349,31 +454,22 @@ impl WgpuState {
                 bind_group_layouts: &[&downsample_layout],
                 immediate_size: 0,
             });
-        let downsample_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("downsample pipeline"),
-            layout: Some(&downsample_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &downsample_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &downsample_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let downsample_pipeline = create_downsample_pipeline(
+            &device,
+            &downsample_pipeline_layout,
+            &downsample_shader,
+            format,
+            false,
+            RENDER_SCALE,
+        );
+        let picker_downsample_pipeline = create_downsample_pipeline(
+            &device,
+            &downsample_pipeline_layout,
+            &downsample_shader,
+            format,
+            true,
+            PICKER_RENDER_SCALE,
+        );
         Self {
             surface,
             surface_config,
@@ -402,9 +498,12 @@ impl WgpuState {
             packed_indices: Vec::new(),
             render_pipeline,
             downsample_pipeline,
+            picker_downsample_pipeline,
             downsample_layout,
             downsample_sampler,
+            screen_layout: bind_group_layout,
             render_target: None,
+            picker_render_target: None,
             screen_buffer,
             screen_bind_group,
             text: None,
@@ -473,7 +572,7 @@ impl WgpuState {
         self.text.as_mut()?.cursor_x(key, index)
     }
 
-    pub fn render(&mut self, previews: &[Geometry], overlays: &[Geometry]) -> bool {
+    pub fn render(&mut self, previews: &[Geometry], picker: Option<&LocalGeometry>) -> bool {
         let preview_index_count = previews
             .iter()
             .map(|geometry| geometry.vertex_buffers.indices.len() as u32)
@@ -483,25 +582,33 @@ impl WgpuState {
             &self.queue,
             &mut self.preview_vertices,
             &mut self.preview_indices,
-            previews.iter().chain(overlays),
+            previews
+                .iter()
+                .chain(picker.into_iter().map(|picker| &picker.geometry)),
             &mut self.packed_vertices,
             &mut self.packed_indices,
         );
 
-        self.render_surface(preview_index_count, total_index_count - preview_index_count)
+        self.render_surface(
+            preview_index_count,
+            total_index_count - preview_index_count,
+            picker,
+        )
     }
 
     fn render_geometry(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         label: &'static str,
+        target: &wgpu::TextureView,
+        screen_bind_group: &wgpu::BindGroup,
         committed: bool,
         indices: std::ops::Range<u32>,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.render_target.as_ref().unwrap().view,
+                view: target,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -515,7 +622,7 @@ impl WgpuState {
             multiview_mask: None,
         });
         pass.set_pipeline(&self.render_pipeline);
-        pass.set_bind_group(0, &self.screen_bind_group, &[]);
+        pass.set_bind_group(0, screen_bind_group, &[]);
         if committed {
             draw_buffer(
                 &mut pass,
@@ -536,11 +643,17 @@ impl WgpuState {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        label: &'static str,
         load: wgpu::LoadOp<wgpu::Color>,
+        source: &RenderTarget,
+        viewport: Option<[f32; 4]>,
+        exact: bool,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(label),
+            label: Some(if exact {
+                "downsample picker"
+            } else {
+                "downsample geometry"
+            }),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
@@ -555,19 +668,64 @@ impl WgpuState {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.downsample_pipeline);
-        pass.set_bind_group(0, &self.render_target.as_ref().unwrap().bind_group, &[]);
+        pass.set_pipeline(if exact {
+            &self.picker_downsample_pipeline
+        } else {
+            &self.downsample_pipeline
+        });
+        if let Some([x, y, width, height]) = viewport {
+            pass.set_viewport(x, y, width, height, 0.0, 1.0);
+        }
+        pass.set_bind_group(0, &source.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 
-    fn render_surface(&mut self, preview_index_count: u32, overlay_index_count: u32) -> bool {
+    fn render_surface(
+        &mut self,
+        preview_index_count: u32,
+        picker_index_count: u32,
+        picker: Option<&LocalGeometry>,
+    ) -> bool {
         if self.render_target.is_none() {
             self.render_target = Some(RenderTarget::new(
                 &self.device,
-                &self.surface_config,
+                self.surface_config.format,
+                [self.surface_config.width, self.surface_config.height],
+                RENDER_SCALE,
+                [0.0; 2],
                 &self.downsample_layout,
                 &self.downsample_sampler,
             ));
+        }
+        if let Some(picker) = picker
+            && self
+                .picker_render_target
+                .as_ref()
+                .is_none_or(|target| target.size != picker.size)
+        {
+            self.picker_render_target = Some(PickerRenderTarget::new(
+                &self.device,
+                self.surface_config.format,
+                picker.size,
+                picker.origin,
+                &self.screen_layout,
+                &self.downsample_layout,
+                &self.downsample_sampler,
+            ));
+        }
+        if let Some(picker) = picker {
+            let target = self.picker_render_target.as_mut().unwrap();
+            if target.origin != picker.origin {
+                self.queue.write_buffer(
+                    &target.target.resolve_buffer,
+                    0,
+                    bytemuck::bytes_of(&ResolveInfo {
+                        origin: picker.origin,
+                        _padding: [0.0; 2],
+                    }),
+                );
+                target.origin = picker.origin;
+            }
         }
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
@@ -591,12 +749,22 @@ impl WgpuState {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        self.render_geometry(&mut encoder, "annotations", true, 0..preview_index_count);
+        let render_target = self.render_target.as_ref().unwrap();
+        self.render_geometry(
+            &mut encoder,
+            "annotations",
+            &render_target.view,
+            &self.screen_bind_group,
+            true,
+            0..preview_index_count,
+        );
         self.downsample(
             &mut encoder,
             &swapchain_view,
-            "downsample annotations",
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            render_target,
+            None,
+            false,
         );
         if let Some(text) = &self.text {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -617,19 +785,32 @@ impl WgpuState {
             });
             text.render(&mut pass);
         }
-        if overlay_index_count != 0 {
+        if let Some(picker) = picker {
+            let picker_target = self.picker_render_target.as_ref().unwrap();
             self.render_geometry(
                 &mut encoder,
-                "editor overlay",
+                "picker",
+                &picker_target.target.view,
+                &picker_target.screen_bind_group,
                 false,
-                preview_index_count..preview_index_count + overlay_index_count,
+                preview_index_count..preview_index_count + picker_index_count,
             );
-            self.downsample(
-                &mut encoder,
-                &swapchain_view,
-                "downsample editor overlay",
-                wgpu::LoadOp::Load,
-            );
+            let left = picker.origin[0].max(0.0);
+            let top = picker.origin[1].max(0.0);
+            let right =
+                (picker.origin[0] + picker.size[0] as f32).min(self.surface_config.width as f32);
+            let bottom =
+                (picker.origin[1] + picker.size[1] as f32).min(self.surface_config.height as f32);
+            if right > left && bottom > top {
+                self.downsample(
+                    &mut encoder,
+                    &swapchain_view,
+                    wgpu::LoadOp::Load,
+                    &picker_target.target,
+                    Some([left, top, right - left, bottom - top]),
+                    true,
+                );
+            }
         }
         self.queue.submit(Some(encoder.finish()));
         output.present();
@@ -641,6 +822,7 @@ impl WgpuState {
 
     pub fn release_render_target(&mut self) {
         self.render_target = None;
+        self.picker_render_target = None;
     }
 
     fn upload_geometry<'a>(
@@ -691,4 +873,49 @@ fn draw_buffer<'pass>(
     pass.set_vertex_buffer(0, vertices.slice(..));
     pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
     pass.draw_indexed(indices_range, 0, 0..1);
+}
+
+fn create_downsample_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    exact: bool,
+    render_scale: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(if exact {
+            "picker downsample pipeline"
+        } else {
+            "downsample pipeline"
+        }),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &[
+                    ("exact", exact as u8 as f64),
+                    ("render_scale", render_scale as f64),
+                ],
+                ..Default::default()
+            },
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }

@@ -1,12 +1,13 @@
 use super::scene::Point;
 use super::tool::Tool;
-use crate::render::{Geometry, Vertex};
+use crate::render::{Geometry, LocalGeometry, Vertex};
 
 const CENTER_RADIUS: f32 = 26.0;
 const COLOR_OUTER_RADIUS: f32 = 72.0;
 const TOOL_INNER_RADIUS: f32 = 76.0;
 const TOOL_OUTER_RADIUS: f32 = 112.0;
 const TOOL_ICON_RADIUS: f32 = (TOOL_INNER_RADIUS + TOOL_OUTER_RADIUS) * 0.5;
+const PICKER_LAYER_SIZE: u32 = 244;
 const WHEEL_BORDER_WIDTH: f32 = 3.0;
 const HOVER_EXTENSION: f32 = 6.0;
 const PREVIEW_BORDER_WIDTH: f32 = 1.0;
@@ -60,10 +61,8 @@ fn radial_index(center: Point, point: Point, count: usize) -> usize {
 }
 
 fn radial_point(center: Point, radius: f32, angle: f32) -> [f32; 2] {
-    [
-        center.x + radius * angle.cos(),
-        center.y + radius * angle.sin(),
-    ]
+    let (sin, cos) = angle.sin_cos();
+    [center.x + radius * cos, center.y + radius * sin]
 }
 
 fn push_disc(
@@ -72,7 +71,7 @@ fn push_disc(
     radius: f32,
     color: [f32; 4],
 ) {
-    const SEGMENTS: usize = 48;
+    const SEGMENTS: usize = 96;
     let base = buffers.vertices.len() as u32;
     buffers
         .vertices
@@ -114,7 +113,7 @@ fn push_wedge(
     edge_inset: f32,
     color: [f32; 4],
 ) {
-    const SEGMENTS: usize = 8;
+    const SEGMENTS: usize = 16;
     let base = buffers.vertices.len() as u32;
     let inner_inset = (edge_inset / inner).asin();
     let outer_inset = (edge_inset / outer).asin();
@@ -182,9 +181,14 @@ pub(super) fn picker_geometry(
     active: Tool,
     current_color: [f32; 4],
     palette: &[[f32; 3]],
-) -> Geometry {
+) -> LocalGeometry {
     let mut buffers = lyon_tessellation::VertexBuffers::new();
-    push_color_preview(&mut buffers, center, current_color);
+    let origin = [
+        (center.x - PICKER_LAYER_SIZE as f32 * 0.5).floor(),
+        (center.y - PICKER_LAYER_SIZE as f32 * 0.5).floor(),
+    ];
+    let local_center = Point::new(center.x - origin[0], center.y - origin[1]);
+    push_color_preview(&mut buffers, local_center, current_color);
     let step = std::f32::consts::TAU / TOOL_CHOICES.len() as f32;
     for (index, tool) in TOOL_CHOICES.iter().copied().enumerate() {
         let is_hovered = hovered == Some(Choice::Tool(tool));
@@ -194,7 +198,7 @@ pub(super) fn picker_geometry(
         let end = start + step;
         push_wedge(
             &mut buffers,
-            center,
+            local_center,
             TOOL_INNER_RADIUS - WHEEL_BORDER_WIDTH,
             outer + WHEEL_BORDER_WIDTH,
             start..end,
@@ -203,7 +207,7 @@ pub(super) fn picker_geometry(
         );
         push_wedge(
             &mut buffers,
-            center,
+            local_center,
             TOOL_INNER_RADIUS,
             outer,
             start..end,
@@ -216,14 +220,17 @@ pub(super) fn picker_geometry(
                 [0.16, 0.18, 0.22, 0.95]
             },
         );
-        let icon_center = Point::new(
-            center.x + TOOL_ICON_RADIUS * (index as f32 * step).cos(),
-            center.y + TOOL_ICON_RADIUS * (index as f32 * step).sin(),
-        );
-        push_tool_icon(&mut buffers, icon_center, tool);
     }
-    push_palette(&mut buffers, center, hovered, palette);
-    Geometry::new(buffers)
+    push_palette(&mut buffers, local_center, hovered, palette);
+    for (index, tool) in TOOL_CHOICES.iter().copied().enumerate() {
+        let (sin, cos) = (index as f32 * step).sin_cos();
+        let tool_icon_center = Point::new(
+            local_center.x + TOOL_ICON_RADIUS * cos,
+            local_center.y + TOOL_ICON_RADIUS * sin,
+        );
+        push_tool_icon(&mut buffers, tool_icon_center, tool);
+    }
+    LocalGeometry::new(Geometry::new(buffers), origin, [PICKER_LAYER_SIZE; 2])
 }
 
 const fn rgb_to_f32(r: u8, g: u8, b: u8, alpha: f32) -> [f32; 4] {
