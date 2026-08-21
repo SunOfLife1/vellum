@@ -6,11 +6,11 @@ use crate::render::{FillRule, Geometry, LocalGeometry, StrokeStyle};
 use kurbo::{Arc, BezPath, Circle, Shape};
 
 const CENTER_RADIUS: f32 = 26.0;
-const COLOR_OUTER_RADIUS: f32 = 72.0;
-const TOOL_INNER_RADIUS: f32 = 76.0;
-const TOOL_OUTER_RADIUS: f32 = 112.0;
+const COLOR_OUTER_RADIUS: f32 = 78.0;
+const TOOL_INNER_RADIUS: f32 = 82.0;
+const TOOL_OUTER_RADIUS: f32 = 118.0;
 const TOOL_ICON_RADIUS: f32 = (TOOL_INNER_RADIUS + TOOL_OUTER_RADIUS) * 0.5;
-const PICKER_LAYER_SIZE: u32 = 244;
+const PICKER_LAYER_SIZE: u32 = 256;
 const WHEEL_BORDER_WIDTH: f32 = 3.0;
 const HOVER_EXTENSION: f32 = 6.0;
 const PREVIEW_BORDER_WIDTH: f32 = 1.0;
