@@ -81,29 +81,22 @@ pub struct DrawState {
 }
 
 impl DrawState {
-    pub fn new(
-        stroke_width: f32,
-        stroke_color: crate::Rgb,
-        default_tool: Tool,
-        remember_last_tool: bool,
-        default_fill_shapes: bool,
-        palette: Vec<crate::Rgb>,
-        feedback_duration: Duration,
-    ) -> Self {
+    pub(super) fn new(settings: crate::Settings) -> Self {
         Self {
             editor: Editor::new(
-                stroke_width,
-                stroke_color,
-                default_tool,
-                remember_last_tool,
-                default_fill_shapes,
-                palette,
+                settings.stroke_width,
+                settings.stroke_color,
+                settings.default_tool,
+                settings.remember_last_tool,
+                settings.default_fill_shapes,
+                &settings.tool_defaults,
+                settings.palette,
             ),
             damage: Damage::Scene,
             feedback: None,
             property_feedback_anchor: None,
             feedback_until: None,
-            feedback_duration,
+            feedback_duration: settings.feedback_duration,
             caret_visible: true,
             caret_until: None,
             previews: Vec::new(),

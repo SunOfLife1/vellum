@@ -3,9 +3,7 @@ mod interaction;
 mod properties;
 
 use self::interaction::Interaction;
-use self::properties::{
-    DEFAULT_ERASER_WIDTH, DEFAULT_TEXT_SIZE, MAX_STROKE_WIDTH, MIN_STROKE_WIDTH, ToolPropertySet,
-};
+use self::properties::{MAX_STROKE_WIDTH, MIN_STROKE_WIDTH, ToolPropertySet};
 use super::Modifiers;
 use super::history::{Entry as HistoryEntry, History};
 use super::picker::{Choice, Picker, ShapeFills, choice, picker_geometry};
@@ -80,6 +78,7 @@ pub struct Editor {
     default_tool: Tool,
     last_non_eraser_tool: Tool,
     tool_properties: ToolPropertySet,
+    default_tool_properties: ToolPropertySet,
     remember_last_tool: bool,
     palette: Vec<[f32; 3]>,
 }
@@ -91,21 +90,24 @@ impl Editor {
         default_tool: Tool,
         remember_last_tool: bool,
         default_fill_shapes: bool,
+        tool_defaults: &crate::config::ToolDefaults,
         palette: Vec<crate::Rgb>,
     ) -> Self {
         let width = width.clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
-        let opacity = 1.0;
-        let tool_properties = ToolPropertySet::new(width, default_fill_shapes);
+        let default_tool_properties =
+            ToolPropertySet::new(width, default_fill_shapes, tool_defaults);
+        let tool_properties = default_tool_properties.clone();
         let active = tool_properties.properties(default_tool).copied();
         Self {
             tool: default_tool,
             style: Style {
-                width: if default_tool == Tool::Eraser {
-                    DEFAULT_ERASER_WIDTH
-                } else {
-                    width
-                },
-                color: [rgb[0], rgb[1], rgb[2], opacity],
+                width: active.map_or(width, |properties| properties.size),
+                color: [
+                    rgb[0],
+                    rgb[1],
+                    rgb[2],
+                    active.map_or(1.0, |properties| properties.opacity),
+                ],
                 roundness: active.map_or(0.5, |properties| properties.roundness),
                 filled: active.is_some_and(|properties| properties.filled),
             },
@@ -116,7 +118,10 @@ impl Editor {
             next_id: 1,
             picker: None,
             default_width: width,
-            default_text_size: DEFAULT_TEXT_SIZE,
+            default_text_size: default_tool_properties
+                .properties(Tool::Text)
+                .expect("text must have adjustable properties")
+                .size,
             default_tool,
             last_non_eraser_tool: if default_tool == Tool::Eraser {
                 Tool::Pen
@@ -124,6 +129,7 @@ impl Editor {
                 default_tool
             },
             tool_properties,
+            default_tool_properties,
             remember_last_tool,
             palette,
         }

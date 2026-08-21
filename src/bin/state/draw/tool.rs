@@ -1,4 +1,5 @@
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Tool {
     #[default]
     Pen,
@@ -13,11 +14,25 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub(super) fn supports_fill(self) -> bool {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Pen => "pen",
+            Self::Line => "line",
+            Self::Arrow => "arrow",
+            Self::Triangle => "triangle",
+            Self::Rectangle => "rectangle",
+            Self::Ellipse => "ellipse",
+            Self::Text => "text",
+            Self::Eraser => "eraser",
+            Self::Select => "select",
+        }
+    }
+
+    pub(crate) fn supports_fill(self) -> bool {
         matches!(self, Self::Triangle | Self::Rectangle | Self::Ellipse)
     }
 
-    pub(super) fn default_roundness(self) -> Option<f32> {
+    pub(crate) fn default_roundness(self) -> Option<f32> {
         match self {
             Self::Line | Self::Arrow | Self::Triangle | Self::Rectangle => {
                 Some(self.initial_roundness())

@@ -22,6 +22,7 @@ in {
         remember_last_tool = true;
         default_fill_shapes = false;
         feedback_duration_ms = 500;
+        tools.pen.opacity = 1.0;
       };
       description = "Preferences written to vellum/config.toml.";
     };

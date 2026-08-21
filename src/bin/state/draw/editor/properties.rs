@@ -48,6 +48,7 @@ pub(super) struct ToolProperties {
     pub filled: bool,
 }
 
+#[derive(Clone)]
 pub(super) struct ToolPropertySet {
     pen: ToolProperties,
     line: ToolProperties,
@@ -60,12 +61,21 @@ pub(super) struct ToolPropertySet {
 }
 
 impl ToolPropertySet {
-    pub(super) fn new(stroke_width: f32, default_fill_shapes: bool) -> Self {
-        let properties = |tool: Tool, size, filled| ToolProperties {
-            size,
-            opacity: 1.0,
-            roundness: tool.initial_roundness(),
-            filled,
+    pub(super) fn new(
+        stroke_width: f32,
+        default_fill_shapes: bool,
+        defaults: &crate::config::ToolDefaults,
+    ) -> Self {
+        let properties = |tool: Tool, size, filled| {
+            let configured = defaults.get(&tool).copied().unwrap_or_default();
+            ToolProperties {
+                size: configured.size.unwrap_or(size),
+                opacity: configured.opacity.unwrap_or(1.0),
+                roundness: configured
+                    .roundness
+                    .unwrap_or_else(|| tool.initial_roundness()),
+                filled: configured.filled.unwrap_or(filled),
+            }
         };
         Self {
             pen: properties(Tool::Pen, stroke_width, false),
@@ -240,30 +250,42 @@ impl Editor {
         if steps == 0.0 {
             return (Damage::None, String::new());
         }
+        let default_text_opacity = self.default_properties(Tool::Text).opacity;
         if let Some(edit) = self.text_edit_mut() {
-            let opacity = stepped_size(edit.style.color[3], 1.0, steps, 0.01, MIN_OPACITY, 1.0);
+            let opacity = stepped_size(
+                edit.style.color[3],
+                default_text_opacity,
+                steps,
+                0.01,
+                MIN_OPACITY,
+                1.0,
+            );
             if opacity == edit.style.color[3] {
                 return (Damage::None, String::new());
             }
             edit.style.color[3] = opacity;
-            return (Damage::Preview, percent_label(opacity, 1.0));
+            return (
+                Damage::Preview,
+                percent_label(opacity, default_text_opacity),
+            );
         }
         if self.selected.is_empty() {
             if self.tool == Tool::Eraser {
                 return (Damage::None, String::new());
             }
             let tool = self.tool;
+            let default = self.default_properties(tool).opacity;
             let Some(properties) = self.properties_mut(tool) else {
                 return (Damage::None, String::new());
             };
-            let opacity = stepped_size(properties.opacity, 1.0, steps, 0.01, MIN_OPACITY, 1.0);
+            let opacity = stepped_size(properties.opacity, default, steps, 0.01, MIN_OPACITY, 1.0);
             if opacity == properties.opacity {
                 return (Damage::None, String::new());
             }
             properties.opacity = opacity;
             self.sync_active_style();
             let damage = self.update_live_stroke_style();
-            return (damage.max(Damage::Preview), percent_label(opacity, 1.0));
+            return (damage.max(Damage::Preview), percent_label(opacity, default));
         }
         self.adjust_selected(|_, style| {
             style.color[3] = stepped_size(style.color[3], 1.0, steps, 0.01, MIN_OPACITY, 1.0);
@@ -277,9 +299,10 @@ impl Editor {
         }
         if self.selected.is_empty() {
             let tool = self.tool;
-            let Some(default) = tool.default_roundness() else {
+            if tool.default_roundness().is_none() {
                 return (Damage::None, String::new());
-            };
+            }
+            let default = self.default_properties(tool).roundness;
             let properties = self
                 .properties_mut(tool)
                 .expect("tools with roundness have adjustable properties");
@@ -384,12 +407,15 @@ impl Editor {
     }
 
     fn default_size(&self, tool: Tool) -> Option<f32> {
-        match tool {
-            Tool::Text => Some(self.default_text_size),
-            Tool::Eraser => Some(DEFAULT_ERASER_WIDTH),
-            Tool::Select => None,
-            _ => Some(self.default_width),
-        }
+        self.default_tool_properties
+            .properties(tool)
+            .map(|properties| properties.size)
+    }
+
+    fn default_properties(&self, tool: Tool) -> &ToolProperties {
+        self.default_tool_properties
+            .properties(tool)
+            .expect("tools with adjustable properties have defaults")
     }
 
     fn style_for(&self, tool: Tool) -> Style {

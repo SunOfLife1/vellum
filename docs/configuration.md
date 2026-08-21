@@ -17,6 +17,22 @@ to load no file.
 | `feedback_duration_ms` | integer | `500` | How long property feedback remains visible, from `0` to `60000` milliseconds |
 | `clear_on_escape` | boolean | `false` | Clear annotations when Escape deactivates drawing mode |
 | `default_fill_shapes` | boolean | `false` | Initially fill triangles, rectangles, and ellipses |
+| `tools.<tool>.size` | number | Tool default | Initial size for that tool |
+| `tools.<tool>.opacity` | number | `1.0` | Initial opacity from `0.05` to `1.0` |
+| `tools.<tool>.roundness` | number | Tool default | Initial roundness from `0.0` to `1.0` |
+| `tools.<tool>.filled` | boolean | `false` | Whether a fillable shape starts filled |
+
+Per-tool values override `stroke_width` and `default_fill_shapes`. Supported properties are:
+
+| Tool | Properties |
+| --- | --- |
+| `pen` | `size`, `opacity` |
+| `line`, `arrow` | `size`, `opacity`, `roundness` |
+| `triangle`, `rectangle` | `size`, `opacity`, `roundness`, `filled` |
+| `ellipse` | `size`, `opacity`, `filled` |
+| `text` | `size`, `opacity` |
+| `eraser` | `size` |
+| `select` | None |
 
 ## Defaults
 
@@ -38,4 +54,42 @@ palette = [
   "#FFFFFF",
   "#000000",
 ]
+
+[tools.pen]
+size = 5.0
+opacity = 1.0
+
+[tools.line]
+size = 5.0
+opacity = 1.0
+roundness = 0.5
+
+[tools.arrow]
+size = 5.0
+opacity = 1.0
+roundness = 0.5
+
+[tools.triangle]
+size = 5.0
+opacity = 1.0
+roundness = 0.0
+filled = false
+
+[tools.rectangle]
+size = 5.0
+opacity = 1.0
+roundness = 0.05
+filled = false
+
+[tools.ellipse]
+size = 5.0
+opacity = 1.0
+filled = false
+
+[tools.text]
+size = 20.0
+opacity = 1.0
+
+[tools.eraser]
+size = 10.0
 ```
