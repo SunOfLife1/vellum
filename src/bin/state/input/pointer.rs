@@ -12,7 +12,7 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::
 
 use super::super::State;
 use super::super::cursor::CursorSurface;
-use super::super::draw::{Action, Cursor, CursorHint};
+use super::super::draw::{Action, Cursor, CursorHint, Modifiers};
 use super::short_click;
 
 const EVDEV_LEFT: u32 = 272;
@@ -28,6 +28,11 @@ const MIDDLE: u8 = 4;
 const UNDO: u8 = 8;
 const REDO: u8 = 16;
 const CLICK_SLOP_SQUARED: f64 = 36.0;
+const WHEEL_ACCEL_TIMEOUT_MS: u32 = 100;
+const WHEEL_ACCEL_SAMPLE_COUNT: usize = 3;
+const WHEEL_ACCEL_MAX_GAIN: f64 = 8.0;
+const WHEEL_ACCEL_CURVE_GAIN: f64 = 11.5;
+const WHEEL_ACCEL_CURVE_SCALE: f64 = 12.0;
 
 #[derive(Default)]
 pub(in crate::state) struct PointerState {
@@ -49,6 +54,7 @@ pub(in crate::state) struct PointerState {
     middle_dragging: bool,
     last_left_click: Option<(u32, (f64, f64))>,
     scroll_remainder: f64,
+    wheel_acceleration: WheelAcceleration,
 }
 
 impl PointerState {
@@ -127,7 +133,7 @@ impl PointerState {
         self.middle_press = None;
         self.middle_dragging = false;
         self.last_left_click = None;
-        self.scroll_remainder = 0.0;
+        self.reset_scroll();
         interaction_active
     }
 
@@ -151,14 +157,96 @@ impl PointerState {
         update_button(&mut self.middle_button_held, sequence, MIDDLE);
     }
 
-    fn scroll_steps(&mut self, sequence: EventSequence) -> f32 {
-        self.scroll_remainder -= sequence.scroll_steps();
+    fn scroll_steps(&mut self, sequence: EventSequence, modifiers: Modifiers) -> f32 {
+        let scroll_steps = sequence.scroll_steps();
+        if scroll_steps != 0.0 && !sequence.is_wheel() {
+            self.wheel_acceleration.reset();
+        }
+        self.scroll_remainder -= scroll_steps;
         let steps = self.scroll_remainder.trunc();
         self.scroll_remainder -= steps;
+        let steps = if steps != 0.0 && sequence.is_wheel() {
+            self.wheel_acceleration
+                .apply(sequence.axis_time, steps, modifiers)
+        } else {
+            steps
+        };
         if sequence.vertical_axis_stopped {
-            self.scroll_remainder = 0.0;
+            self.reset_scroll();
         }
         steps as f32
+    }
+
+    fn reset_scroll(&mut self) {
+        self.scroll_remainder = 0.0;
+        self.wheel_acceleration.reset();
+    }
+}
+
+#[derive(Default)]
+struct WheelAcceleration {
+    samples: [(u32, f64); WHEEL_ACCEL_SAMPLE_COUNT],
+    sample_count: usize,
+    step_remainder: f64,
+    modifiers: Option<(bool, bool)>,
+}
+
+impl WheelAcceleration {
+    fn apply(&mut self, time: Option<u32>, steps: f64, modifiers: Modifiers) -> f64 {
+        let Some(time) = time else {
+            self.reset();
+            return steps;
+        };
+        let modifier_state = (modifiers.ctrl, modifiers.shift);
+        let continues = self.sample_count > 0
+            && self.modifiers == Some(modifier_state)
+            && self.samples[self.sample_count - 1].1.is_sign_positive() == steps.is_sign_positive()
+            && time.wrapping_sub(self.samples[self.sample_count - 1].0) <= WHEEL_ACCEL_TIMEOUT_MS;
+        if !continues {
+            self.reset();
+            self.modifiers = Some(modifier_state);
+        }
+
+        let gain = self.gain(time, steps);
+        let accelerated = steps * gain + self.step_remainder;
+        let whole_steps = accelerated.trunc();
+        self.step_remainder = accelerated - whole_steps;
+        self.push_sample(time, steps);
+        whole_steps
+    }
+
+    fn gain(&self, time: u32, steps: f64) -> f64 {
+        if self.sample_count < WHEEL_ACCEL_SAMPLE_COUNT {
+            return 1.0;
+        }
+        let distance = steps.abs()
+            + self.samples[1..WHEEL_ACCEL_SAMPLE_COUNT]
+                .iter()
+                .map(|(_, steps)| steps.abs())
+                .sum::<f64>();
+        let average_interval_ms = f64::from(time.wrapping_sub(self.samples[0].0)) / distance;
+        if average_interval_ms >= f64::from(WHEEL_ACCEL_TIMEOUT_MS) {
+            return 1.0;
+        }
+        let interval_seconds = average_interval_ms / 1_000.0;
+        (WHEEL_ACCEL_CURVE_GAIN * (1.0 + WHEEL_ACCEL_CURVE_SCALE * interval_seconds).powi(-3))
+            .clamp(1.0, WHEEL_ACCEL_MAX_GAIN)
+    }
+
+    fn push_sample(&mut self, time: u32, steps: f64) {
+        if self.sample_count < WHEEL_ACCEL_SAMPLE_COUNT {
+            self.samples[self.sample_count] = (time, steps);
+            self.sample_count += 1;
+        } else {
+            self.samples.rotate_left(1);
+            self.samples[WHEEL_ACCEL_SAMPLE_COUNT - 1] = (time, steps);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.sample_count = 0;
+        self.step_remainder = 0.0;
+        self.modifiers = None;
     }
 }
 
@@ -283,10 +371,10 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                 }
                 if state.draw.picker_active() {
                     if sequence.vertical_axis_stopped {
-                        state.pointer.scroll_remainder = 0.0;
+                        state.pointer.reset_scroll();
                     }
                 } else {
-                    let steps = state.pointer.scroll_steps(sequence);
+                    let steps = state.pointer.scroll_steps(sequence, modifiers);
                     if steps != 0.0 {
                         state.adjust(steps, pos, modifiers);
                     }
@@ -321,6 +409,7 @@ struct EventSequence {
     axis_vertical: f64,
     axis_discrete: i32,
     axis_value120: i32,
+    axis_time: Option<u32>,
     vertical_axis_stopped: bool,
 
     enter_serial: Option<u32>,
@@ -344,6 +433,10 @@ impl EventSequence {
         } else {
             self.axis_vertical / 10.0
         }
+    }
+
+    fn is_wheel(self) -> bool {
+        self.axis_value120 != 0 || self.axis_discrete != 0
     }
 
     fn dispatch(&mut self, event: <WlPointer as Proxy>::Event) -> Option<Self> {
@@ -405,10 +498,11 @@ impl EventSequence {
             }
             Event::Axis {
                 axis: WEnum::Value(wayland_client::protocol::wl_pointer::Axis::VerticalScroll),
+                time,
                 value,
-                ..
             } => {
                 self.axis_vertical += value;
+                self.axis_time = Some(time);
                 None
             }
             Event::AxisDiscrete {

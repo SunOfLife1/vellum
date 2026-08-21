@@ -918,7 +918,7 @@ impl Editor {
                             style.width,
                             default_width,
                             steps,
-                            0.5,
+                            1.0,
                             MIN_STROKE_WIDTH,
                             MAX_STROKE_WIDTH,
                         );
@@ -956,7 +956,7 @@ impl Editor {
                 properties.size,
                 default,
                 steps,
-                0.5,
+                1.0,
                 minimum,
                 MAX_STROKE_WIDTH,
             );
@@ -975,7 +975,7 @@ impl Editor {
             return (Damage::None, String::new());
         }
         if let Some(edit) = self.text_edit_mut() {
-            let opacity = stepped_size(edit.style.color[3], 1.0, steps, 0.05, MIN_OPACITY, 1.0);
+            let opacity = stepped_size(edit.style.color[3], 1.0, steps, 0.01, MIN_OPACITY, 1.0);
             if opacity == edit.style.color[3] {
                 return (Damage::None, String::new());
             }
@@ -990,7 +990,7 @@ impl Editor {
                 return (Damage::None, String::new());
             };
             let properties = &mut self.tool_properties[slot];
-            let opacity = stepped_size(properties.opacity, 1.0, steps, 0.05, MIN_OPACITY, 1.0);
+            let opacity = stepped_size(properties.opacity, 1.0, steps, 0.01, MIN_OPACITY, 1.0);
             if opacity == properties.opacity {
                 return (Damage::None, String::new());
             }
@@ -1000,7 +1000,7 @@ impl Editor {
             return (damage.max(Damage::Preview), percent_label(opacity, 1.0));
         }
         self.adjust_selected(|_, style| {
-            style.color[3] = stepped_size(style.color[3], 1.0, steps, 0.05, MIN_OPACITY, 1.0);
+            style.color[3] = stepped_size(style.color[3], 1.0, steps, 0.01, MIN_OPACITY, 1.0);
             Some(percent_label(style.color[3], 1.0))
         })
     }
@@ -1014,7 +1014,7 @@ impl Editor {
                 return (Damage::None, String::new());
             };
             let properties = &mut self.tool_properties[slot];
-            let roundness = stepped_size(properties.roundness, default, steps, 0.1, 0.0, 1.0);
+            let roundness = stepped_size(properties.roundness, default, steps, 0.01, 0.0, 1.0);
             if roundness == properties.roundness {
                 return (Damage::None, String::new());
             }
@@ -1028,7 +1028,7 @@ impl Editor {
         }
         self.adjust_selected(|kind, style| {
             let default = default_roundness(kind)?;
-            style.roundness = stepped_size(style.roundness, default, steps, 0.1, 0.0, 1.0);
+            style.roundness = stepped_size(style.roundness, default, steps, 0.01, 0.0, 1.0);
             Some(percent_label(style.roundness, default))
         })
     }
