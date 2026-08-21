@@ -9,14 +9,14 @@ pub(super) fn geometry(vertices: &[Point; 3], style: Style) -> Geometry {
         return Geometry::empty();
     }
     Geometry::fill(
-        outline(vertices, style.width, style.roundness),
+        outline(vertices, style.width, style.roundness, style.filled),
         FillRule::EvenOdd,
         style.color,
     )
 }
 
 pub(super) fn bounds(vertices: &[Point; 3], style: Style) -> Bounds {
-    let bounds = outline(vertices, style.width, style.roundness).bounding_box();
+    let bounds = outline(vertices, style.width, style.roundness, style.filled).bounding_box();
     Bounds {
         min: Point::new(bounds.x0 as f32, bounds.y0 as f32),
         max: Point::new(bounds.x1 as f32, bounds.y1 as f32),
@@ -24,7 +24,7 @@ pub(super) fn bounds(vertices: &[Point; 3], style: Style) -> Bounds {
 }
 
 pub(super) fn hit_test(vertices: &[Point; 3], style: Style, point: Point, slop: f32) -> bool {
-    let outline = outline(vertices, style.width, style.roundness);
+    let outline = outline(vertices, style.width, style.roundness, style.filled);
     let point = kurbo::Point::new(point.x as f64, point.y as f64);
     if outline.winding(point).unsigned_abs() % 2 == 1 {
         return true;
@@ -35,7 +35,7 @@ pub(super) fn hit_test(vertices: &[Point; 3], style: Style, point: Point, slop: 
         .any(|segment| segment.nearest(point, 0.1).distance_sq <= tolerance_squared)
 }
 
-fn outline(vertices: &[Point; 3], width: f32, roundness: f32) -> BezPath {
+fn outline(vertices: &[Point; 3], width: f32, roundness: f32, filled: bool) -> BezPath {
     let outer = vertices.map(|point| kurbo::Point::new(point.x as f64, point.y as f64));
     let area = cross(outer[1] - outer[0], outer[2] - outer[0]);
     let scale = outer
@@ -49,7 +49,8 @@ fn outline(vertices: &[Point; 3], width: f32, roundness: f32) -> BezPath {
     };
     let mut path = BezPath::new();
     add_contour(&mut path, &normalized, roundness as f64);
-    if area.abs() > f64::EPSILON * scale * scale * 16.0
+    if !filled
+        && area.abs() > f64::EPSILON * scale * scale * 16.0
         && let Some(inner) = inset_triangle(&normalized, width as f64, 1.0)
     {
         add_contour(&mut path, &inner, roundness as f64);

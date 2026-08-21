@@ -103,6 +103,7 @@ pub struct Style {
     pub width: f32,
     pub color: [f32; 4],
     pub roundness: f32,
+    pub filled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,9 +275,14 @@ impl Element {
             ElementKind::Triangle { vertices } => {
                 super::triangle::hit_test(vertices, self.style, point, slop)
             }
-            ElementKind::Rectangle { min, max } => {
-                rounded_rectangle_hit(*min, *max, self.style.roundness, point, tolerance)
-            }
+            ElementKind::Rectangle { min, max } => rounded_rectangle_hit(
+                *min,
+                *max,
+                self.style.roundness,
+                self.style.filled,
+                point,
+                tolerance,
+            ),
             ElementKind::Ellipse { center, radii } => {
                 if radii.x <= f32::EPSILON || radii.y <= f32::EPSILON {
                     return point.distance_squared(*center) <= tolerance.powi(2);
@@ -284,7 +290,11 @@ impl Element {
                 let local = point - *center;
                 let normalized = ((local.x / radii.x).powi(2) + (local.y / radii.y).powi(2)).sqrt();
                 let normalized_tolerance = tolerance / radii.x.min(radii.y).max(1.0);
-                (normalized - 1.0).abs() <= normalized_tolerance
+                if self.style.filled {
+                    normalized <= 1.0 + normalized_tolerance
+                } else {
+                    (normalized - 1.0).abs() <= normalized_tolerance
+                }
             }
             ElementKind::Text { .. } => {
                 if expand_text {
@@ -358,6 +368,21 @@ pub(super) fn geometry(kind: &ElementKind, style: Style) -> Geometry {
     }
     if let ElementKind::Triangle { vertices } = kind {
         return super::triangle::geometry(vertices, style);
+    }
+    if let ElementKind::Ellipse { center, radii } = kind
+        && style.filled
+    {
+        let half = style.width * 0.5;
+        let path = kurbo::Ellipse::new(
+            (f64::from(center.x), f64::from(center.y)),
+            (
+                f64::from((radii.x + half).max(0.0)),
+                f64::from((radii.y + half).max(0.0)),
+            ),
+            0.0,
+        )
+        .to_path(0.1);
+        return Geometry::fill(path, FillRule::NonZero, style.color);
     }
     let marker = match kind {
         ElementKind::Path {
@@ -498,7 +523,8 @@ fn rectangle_geometry(min: Point, max: Point, style: Style) -> Geometry {
         ),
     ];
     let mut path = kurbo::BezPath::new();
-    for (min, max, radius) in contours {
+    let contour_count = if style.filled { 1 } else { contours.len() };
+    for (min, max, radius) in contours.into_iter().take(contour_count) {
         if min.x >= max.x || min.y >= max.y {
             continue;
         }
@@ -532,6 +558,7 @@ fn rounded_rectangle_hit(
     min: Point,
     max: Point,
     roundness: f32,
+    filled: bool,
     point: Point,
     tolerance: f32,
 ) -> bool {
@@ -540,7 +567,11 @@ fn rounded_rectangle_hit(
     let x = (point.x - center.x).abs() - ((max.x - min.x) * 0.5 - radius);
     let y = (point.y - center.y).abs() - ((max.y - min.y) * 0.5 - radius);
     let distance = x.max(0.0).hypot(y.max(0.0)) + x.max(y).min(0.0) - radius;
-    distance.abs() <= tolerance
+    if filled {
+        distance <= tolerance
+    } else {
+        distance.abs() <= tolerance
+    }
 }
 
 pub(super) fn default_roundness(kind: &ElementKind) -> Option<f32> {

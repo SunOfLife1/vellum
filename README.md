@@ -69,6 +69,7 @@ Mod+A { spawn "vellum" "toggle"; }
 | Double-click selected text | Edit it |
 | `Shift` while drawing | Constrain the shape |
 | `Alt` while drawing | Draw triangles, rectangles, and ellipses from their center |
+| `F` | Toggle between outlined and filled shapes |
 | `Ctrl` + scroll | Change opacity |
 | `Shift` + scroll | Change roundness |
 

@@ -190,6 +190,7 @@ pub(super) fn picker_geometry(
     hovered: Option<Choice>,
     active: Tool,
     current_color: [f32; 4],
+    tool_fills: [bool; 3],
     palette: &[[f32; 3]],
 ) -> LocalGeometry {
     let mut output = Geometry::empty();
@@ -238,7 +239,13 @@ pub(super) fn picker_geometry(
             local_center.x + TOOL_ICON_RADIUS * cos,
             local_center.y + TOOL_ICON_RADIUS * sin,
         );
-        push_tool_icon(&mut output, tool_icon_center, tool);
+        let filled = match tool {
+            Tool::Triangle => tool_fills[0],
+            Tool::Rectangle => tool_fills[1],
+            Tool::Ellipse => tool_fills[2],
+            _ => false,
+        };
+        push_tool_icon(&mut output, tool_icon_center, tool, filled);
     }
     LocalGeometry::new(output, origin, [PICKER_LAYER_SIZE; 2])
 }
@@ -251,7 +258,7 @@ fn opaque([red, green, blue, _]: [f32; 4]) -> [f32; 4] {
     [red, green, blue, 1.0]
 }
 
-fn push_tool_icon(output: &mut Geometry, center: Point, tool: Tool) {
+fn push_tool_icon(output: &mut Geometry, center: Point, tool: Tool, filled: bool) {
     const SCALE: f32 = 0.82;
     let p = |x: f32, y: f32| {
         (
@@ -321,9 +328,9 @@ fn push_tool_icon(output: &mut Geometry, center: Point, tool: Tool) {
         }
         Tool::Eraser => unreachable!("eraser is not a radial choice"),
     }
-    output.append(Geometry::stroke(
-        path,
-        StrokeStyle::round(2.0),
-        [0.96, 0.97, 1.0, 1.0],
-    ));
+    let icon_color = [0.96, 0.97, 1.0, 1.0];
+    if filled {
+        output.append(Geometry::fill(path.clone(), FillRule::NonZero, icon_color));
+    }
+    output.append(Geometry::stroke(path, StrokeStyle::round(2.0), icon_color));
 }

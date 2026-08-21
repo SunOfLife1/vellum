@@ -105,6 +105,7 @@ pub(super) fn outline(min: Point, max: Point) -> Geometry {
             width: SELECTION_WIDTH,
             color: COLOR,
             roundness: 0.0,
+            filled: false,
         },
     )
 }
@@ -189,6 +190,7 @@ fn endpoint_geometry(center: Point) -> Geometry {
             width: SELECTION_WIDTH,
             color: COLOR,
             roundness: 0.0,
+            filled: false,
         },
     ));
     output

@@ -66,6 +66,7 @@ impl DrawState {
         stroke_color: crate::Rgb,
         default_tool: Tool,
         remember_last_tool: bool,
+        default_fill_shapes: bool,
         palette: Vec<crate::Rgb>,
         feedback_duration: Duration,
     ) -> Self {
@@ -75,6 +76,7 @@ impl DrawState {
                 stroke_color,
                 default_tool,
                 remember_last_tool,
+                default_fill_shapes,
                 palette,
             ),
             damage: Damage::Scene,
@@ -114,8 +116,13 @@ impl DrawState {
         self.editor.is_drawing_pen()
     }
 
-    pub fn handle_action(&mut self, action: Action) -> EditorEffect {
+    pub fn handle_action(&mut self, action: Action, at: Option<Point>) -> EditorEffect {
         let mut effect = self.editor.handle_action(action);
+        if let (Some(label), Some(at)) = (effect.feedback.take(), at) {
+            self.property_feedback_anchor = Some(at);
+            self.feedback = Some((label, at));
+            self.feedback_until = Some(Instant::now() + self.feedback_duration);
+        }
         if self.editor.is_editing_text() {
             if self.show_caret() {
                 effect.damage = effect.damage.max(Damage::Preview);

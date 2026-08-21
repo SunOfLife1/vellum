@@ -19,6 +19,10 @@ impl Tool {
     pub(super) const TRIANGLE_ROUNDNESS: f32 = 0.0;
     pub(super) const RECTANGLE_ROUNDNESS: f32 = 0.05;
 
+    pub(super) fn supports_fill(self) -> bool {
+        matches!(self, Self::Triangle | Self::Rectangle | Self::Ellipse)
+    }
+
     pub(super) fn properties(self) -> Option<(usize, Option<f32>)> {
         Some(match self {
             Self::Pen => (0, None),

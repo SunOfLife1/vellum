@@ -34,6 +34,10 @@ fn percent_label(value: f32, default: f32) -> String {
     format!("{:.0}%{suffix}", value * 100.0)
 }
 
+fn fill_label(filled: bool) -> String {
+    format!("Fill · {}", if filled { "solid" } else { "outline" })
+}
+
 fn stepped_size(value: f32, default: f32, steps: f32, increment: f32, min: f32, max: f32) -> f32 {
     let offset = (value - default) / increment;
     let aligned = if steps.is_sign_positive() {
@@ -49,6 +53,7 @@ pub(crate) enum Action {
     Redo,
     SelectAll,
     ToggleEraser,
+    ToggleFill,
     Delete,
     Clear,
     Cancel,
@@ -116,6 +121,7 @@ impl Damage {
 pub struct EditorEffect {
     pub damage: Damage,
     pub deactivate: bool,
+    pub feedback: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -123,6 +129,7 @@ struct ToolProperties {
     size: f32,
     opacity: f32,
     roundness: f32,
+    filled: bool,
 }
 
 pub struct Editor {
@@ -149,12 +156,13 @@ impl Editor {
         rgb: crate::Rgb,
         default_tool: Tool,
         remember_last_tool: bool,
+        default_fill_shapes: bool,
         palette: Vec<crate::Rgb>,
     ) -> Self {
         let width = width.clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
         let text_size = DEFAULT_TEXT_SIZE;
         let opacity = 1.0;
-        let mut tool_properties = [
+        let roundness = [
             Tool::PEN_ROUNDNESS,
             Tool::LINE_ROUNDNESS,
             Tool::ARROW_ROUNDNESS,
@@ -163,11 +171,22 @@ impl Editor {
             0.0,
             0.0,
             0.0,
-        ]
-        .map(|roundness| ToolProperties {
+        ];
+        let filled = [
+            false,
+            false,
+            false,
+            default_fill_shapes,
+            default_fill_shapes,
+            default_fill_shapes,
+            false,
+            false,
+        ];
+        let mut tool_properties = std::array::from_fn(|index| ToolProperties {
             size: width,
             opacity,
-            roundness,
+            roundness: roundness[index],
+            filled: filled[index],
         });
         let (eraser_slot, _) = Tool::Eraser
             .properties()
@@ -187,6 +206,7 @@ impl Editor {
                 },
                 color: [rgb[0], rgb[1], rgb[2], opacity],
                 roundness: active.map_or(0.5, |properties| properties.roundness),
+                filled: active.is_some_and(|properties| properties.filled),
             },
             elements: Vec::new(),
             selected: Vec::new(),
@@ -302,6 +322,11 @@ impl Editor {
             Action::Redo if !self.is_editing_text() => effect.damage = self.redo(),
             Action::SelectAll => effect.damage = self.select_all(),
             Action::ToggleEraser => effect.damage = self.toggle_eraser(),
+            Action::ToggleFill => {
+                let (damage, feedback) = self.toggle_fill();
+                effect.damage = damage;
+                effect.feedback = (!feedback.is_empty()).then_some(feedback);
+            }
             Action::Delete => {
                 if let Some(edit) = self.text_edit_mut() {
                     effect.damage = Damage::from_preview(edit.delete());
@@ -639,6 +664,47 @@ impl Editor {
         self.switch_tool(tool)
     }
 
+    fn toggle_fill(&mut self) -> (Damage, String) {
+        if !self.selected.is_empty() {
+            let fill = self
+                .selected
+                .iter()
+                .filter_map(|id| self.element(*id))
+                .filter(|element| fillable(&element.kind))
+                .any(|element| !element.style.filled);
+            return self.adjust_selected(|kind, style| {
+                fillable(kind).then(|| {
+                    style.filled = fill;
+                    fill_label(fill)
+                })
+            });
+        }
+        if !self.tool.supports_fill() {
+            return (Damage::None, String::new());
+        }
+        let (slot, _) = self
+            .tool
+            .properties()
+            .expect("fillable tools have adjustable properties");
+        let filled = !self.tool_properties[slot].filled;
+        self.tool_properties[slot].filled = filled;
+        self.style.filled = filled;
+        (Damage::Preview, fill_label(filled))
+    }
+
+    fn tool_fill(&self, tool: Tool) -> bool {
+        tool.properties()
+            .is_some_and(|(slot, _)| self.tool_properties[slot].filled)
+    }
+
+    fn picker_tool(&self) -> Tool {
+        if self.tool == Tool::Eraser {
+            self.last_non_eraser_tool
+        } else {
+            self.tool
+        }
+    }
+
     pub fn append_preview_geometry(&self, output: &mut Vec<Geometry>) {
         match &self.interaction {
             Some(Interaction::Freehand(stroke)) => output.push(stroke.tail_geometry()),
@@ -756,16 +822,17 @@ impl Editor {
 
     pub fn picker_geometry(&self) -> Option<crate::render::LocalGeometry> {
         let picker = self.picker?;
-        let active = if self.tool == Tool::Eraser {
-            self.last_non_eraser_tool
-        } else {
-            self.tool
-        };
+        let active = self.picker_tool();
         Some(picker_geometry(
             picker.center,
             picker.hovered,
             active,
             self.current_color(),
+            [
+                self.tool_fill(Tool::Triangle),
+                self.tool_fill(Tool::Rectangle),
+                self.tool_fill(Tool::Ellipse),
+            ],
             &self.palette,
         ))
     }
@@ -1312,6 +1379,7 @@ impl Editor {
             }
             self.style.color[3] = properties.opacity;
             self.style.roundness = properties.roundness;
+            self.style.filled = properties.filled;
         }
         damage
     }
@@ -1323,6 +1391,13 @@ impl Editor {
     fn element_mut(&mut self, id: ElementId) -> Option<&mut Element> {
         self.elements.iter_mut().find(|element| element.id == id)
     }
+}
+
+fn fillable(kind: &ElementKind) -> bool {
+    matches!(
+        kind,
+        ElementKind::Triangle { .. } | ElementKind::Rectangle { .. } | ElementKind::Ellipse { .. }
+    )
 }
 
 fn drawing_kind(tool: Tool, start: Point, current: Point, modifiers: Modifiers) -> ElementKind {

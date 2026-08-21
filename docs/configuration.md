@@ -16,6 +16,7 @@ to load no file.
 | `palette` | array of strings | Eight standard colors | Between 2 and 12 `#RRGGBB` colors |
 | `feedback_duration_ms` | integer | `500` | How long property feedback remains visible, from `0` to `60000` milliseconds |
 | `clear_on_escape` | boolean | `false` | Clear annotations when Escape deactivates drawing mode |
+| `default_fill_shapes` | boolean | `false` | Initially fill triangles, rectangles, and ellipses |
 
 ## Defaults
 
@@ -26,6 +27,7 @@ stroke_width = 5.0
 default_color = "#E84046"
 feedback_duration_ms = 500
 clear_on_escape = false
+default_fill_shapes = false
 palette = [
   "#E84046",
   "#EC8948",

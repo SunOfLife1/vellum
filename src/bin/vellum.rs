@@ -35,6 +35,7 @@ struct FileConfig {
     palette: Option<Vec<String>>,
     feedback_duration_ms: Option<u64>,
     clear_on_escape: Option<bool>,
+    default_fill_shapes: Option<bool>,
 }
 
 struct Settings {
@@ -46,6 +47,7 @@ struct Settings {
     palette: Vec<Rgb>,
     feedback_duration: Duration,
     clear_on_escape: bool,
+    default_fill_shapes: bool,
 }
 
 impl Settings {
@@ -105,6 +107,7 @@ impl Settings {
             palette,
             feedback_duration: Duration::from_millis(feedback_duration_ms),
             clear_on_escape: file.clear_on_escape.unwrap_or(false),
+            default_fill_shapes: file.default_fill_shapes.unwrap_or(false),
         })
     }
 }

@@ -12,6 +12,7 @@ const KEYCODE_OFFSET: u32 = 8;
 const SELECT_ALL_KEY: &str = "a";
 const UNDO_KEY: &str = "z";
 const REDO_KEY: &str = "y";
+const TOGGLE_FILL_KEY: &str = "f";
 
 enum LogicalKey {
     Character(String),
@@ -75,6 +76,11 @@ fn resolve_keybinding(chord: &KeyChord, editing_text: bool) -> Option<Action> {
             } else {
                 Action::Undo
             })
+        }
+        Character(character)
+            if !chord.modifiers.ctrl && character.eq_ignore_ascii_case(TOGGLE_FILL_KEY) =>
+        {
+            Some(Action::ToggleFill)
         }
         _ => None,
     }
@@ -283,7 +289,10 @@ impl Dispatch<WlKeyboard, ()> for State {
                     .keyboard
                     .chord(key)
                     .and_then(|chord| resolve_keybinding(&chord, state.draw.is_editing_text()));
-                state.keyboard.update_repeat(key, action.is_some());
+                let repeatable = action
+                    .as_ref()
+                    .is_some_and(|action| !matches!(action, Action::ToggleFill));
+                state.keyboard.update_repeat(key, repeatable);
                 if let Some(action) = action {
                     state.apply_action(action);
                 }

@@ -243,6 +243,7 @@ impl State {
                 settings.stroke_color,
                 settings.default_tool,
                 settings.remember_last_tool,
+                settings.default_fill_shapes,
                 settings.palette,
                 settings.feedback_duration,
             ),
@@ -331,7 +332,11 @@ impl State {
 
     fn apply_action(&mut self, action: Action) {
         let clear_on_escape = self.clear_on_escape && matches!(action, Action::Cancel);
-        let effect = self.draw.handle_action(action);
+        let anchor = self
+            .pointer
+            .position()
+            .map(|(x, y)| Point::new(x as f32, y as f32));
+        let effect = self.draw.handle_action(action, anchor);
         if effect.damage.changed() {
             self.request_render();
         }
