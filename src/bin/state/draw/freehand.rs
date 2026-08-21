@@ -49,6 +49,23 @@ impl LiveStroke {
         &self.cached
     }
 
+    pub fn update_style(&mut self, style: Style) -> bool {
+        self.style = style;
+        if self.cached.is_empty() {
+            return false;
+        }
+
+        self.preview_start = 0;
+        self.cached.clear();
+        while cache_ready_chunk(
+            &self.points,
+            self.style,
+            &mut self.preview_start,
+            &mut self.cached,
+        ) {}
+        true
+    }
+
     pub fn finish(mut self, point: Point) -> (Vec<Point>, Style, Geometry) {
         self.push(point);
         let mut geometry = Geometry::empty();

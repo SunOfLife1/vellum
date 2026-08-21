@@ -67,7 +67,6 @@ enum Interaction {
         start: Point,
         current: Point,
         modifiers: Modifiers,
-        style: Style,
     },
     Moving {
         ids: Vec<ElementId>,
@@ -363,7 +362,6 @@ impl Editor {
                     start: point,
                     current: point,
                     modifiers,
-                    style: self.style,
                 });
                 previous.max(Damage::Preview)
             }
@@ -446,15 +444,12 @@ impl Editor {
                     Damage::from_preview(changed)
                 }
             }
-            Some(Interaction::Drawing {
-                tool, start, style, ..
-            }) => {
+            Some(Interaction::Drawing { tool, start, .. }) => {
                 self.interaction = Some(Interaction::Drawing {
                     tool,
                     start,
                     current: point,
                     modifiers,
-                    style,
                 });
                 Damage::Preview
             }
@@ -524,10 +519,8 @@ impl Editor {
                 );
                 Damage::Scene
             }
-            Some(Interaction::Drawing {
-                tool, start, style, ..
-            }) => {
-                self.insert_kind(drawing_kind(tool, start, point, modifiers), style);
+            Some(Interaction::Drawing { tool, start, .. }) => {
+                self.insert_kind(drawing_kind(tool, start, point, modifiers), self.style);
                 Damage::Scene
             }
             Some(Interaction::Moving {
@@ -645,10 +638,9 @@ impl Editor {
                 start,
                 current,
                 modifiers,
-                style,
             }) => output.push(geometry(
                 &drawing_kind(*tool, *start, *current, *modifiers),
-                *style,
+                self.style,
             )),
             Some(Interaction::Moving {
                 ids,
@@ -886,10 +878,12 @@ impl Editor {
                 MIN_STROKE_WIDTH,
                 MAX_STROKE_WIDTH,
             );
-            self.style.width = properties.size;
+            let width = properties.size;
+            self.style.width = width;
+            let damage = self.update_live_stroke_style();
             (
-                Damage::Preview,
-                stroke_size_label(properties.size, self.default_width),
+                damage.max(Damage::Preview),
+                stroke_size_label(width, self.default_width),
             )
         }
     }
@@ -917,7 +911,11 @@ impl Editor {
             }
             properties.opacity = opacity;
             self.style.color[3] = opacity;
-            return (Damage::Preview, percent_label("Opacity", opacity, 1.0));
+            let damage = self.update_live_stroke_style();
+            return (
+                damage.max(Damage::Preview),
+                percent_label("Opacity", opacity, 1.0),
+            );
         }
         self.adjust_selected(|_, style| {
             style.color[3] = stepped_size(style.color[3], 1.0, steps, 0.05, MIN_OPACITY, 1.0);
@@ -940,8 +938,9 @@ impl Editor {
             }
             properties.roundness = roundness;
             self.style.roundness = roundness;
+            let damage = self.update_live_stroke_style();
             return (
-                Damage::Preview,
+                damage.max(Damage::Preview),
                 percent_label("Roundness", roundness, default),
             );
         }
@@ -979,6 +978,19 @@ impl Editor {
         }
         self.history.record(HistoryEntry::Update(updates));
         (Damage::Scene, feedback)
+    }
+
+    fn update_live_stroke_style(&mut self) -> Damage {
+        match &mut self.interaction {
+            Some(Interaction::Freehand(stroke)) => {
+                if stroke.update_style(self.style) {
+                    Damage::Scene
+                } else {
+                    Damage::Preview
+                }
+            }
+            _ => Damage::None,
+        }
     }
 
     fn hit_handle(&self, id: ElementId, point: Point) -> Option<Handle> {
