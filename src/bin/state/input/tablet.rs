@@ -22,7 +22,7 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::EVT_TOOL_ADD
 
 use super::super::State;
 use super::super::cursor::CursorSurface;
-use super::super::draw::{Cursor, Point};
+use super::super::draw::{Cursor, Point, ToolOverride};
 use super::pointer::cursor_shape;
 use super::short_click;
 
@@ -198,7 +198,7 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
             if button_pressed && let Some(pos) = state.tablet.pos {
                 if state.tablet.pen_held {
                     state.pointer_up(pos, modifiers, false);
-                    state.pointer_down(pos, modifiers, true);
+                    state.pointer_down(pos, modifiers, ToolOverride::Eraser);
                 } else {
                     state.toggle_picker(pos);
                 }
@@ -210,7 +210,11 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
                 if eraser {
                     state.dismiss_picker();
                 }
-                state.pointer_down(pos, modifiers, eraser || state.tablet.button_held);
+                state.pointer_down(
+                    pos,
+                    modifiers,
+                    ToolOverride::from_eraser(eraser || state.tablet.button_held),
+                );
             }
             if button_released
                 && state.tablet.pen_held
@@ -218,7 +222,7 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
                 && let Some(pos) = state.tablet.pos
             {
                 state.pointer_up(pos, modifiers, false);
-                state.pointer_down(pos, modifiers, eraser);
+                state.pointer_down(pos, modifiers, ToolOverride::from_eraser(eraser));
             } else if button_released
                 && state.draw.picker_active()
                 && let Some(pos) = state.tablet.pos
@@ -239,11 +243,12 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
             }
             if !sequence.proximity_out {
                 let (x, y) = state.tablet.pos.unwrap_or_default();
-                let temporary_eraser =
-                    eraser || (state.tablet.button_held && state.tablet.pen_held);
+                let tool_override = ToolOverride::from_eraser(
+                    eraser || (state.tablet.button_held && state.tablet.pen_held),
+                );
                 let cursor = state
                     .draw
-                    .cursor(Point::new(x as f32, y as f32), temporary_eraser);
+                    .cursor(Point::new(x as f32, y as f32), tool_override);
                 state.tablet.refresh_cursor(
                     tablet_tool,
                     cursor,

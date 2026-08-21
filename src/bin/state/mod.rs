@@ -365,11 +365,16 @@ impl State {
         }
     }
 
-    fn pointer_down(&mut self, (x, y): (f64, f64), modifiers: Modifiers, temporary_eraser: bool) {
+    fn pointer_down(
+        &mut self,
+        (x, y): (f64, f64),
+        modifiers: Modifiers,
+        tool_override: draw::ToolOverride,
+    ) {
         self.pending_pen_motion = None;
         let point = Point::new(x as f32, y as f32);
         if self.draw.picker_active() {
-            let changed = if temporary_eraser {
+            let changed = if tool_override == draw::ToolOverride::Eraser {
                 self.draw.dismiss_picker()
             } else {
                 self.draw.picker_motion(point)
@@ -379,7 +384,7 @@ impl State {
             }
             return;
         }
-        if self.draw.pointer_down(point, modifiers, temporary_eraser) {
+        if self.draw.pointer_down(point, modifiers, tool_override) {
             self.request_render();
         }
     }
@@ -460,10 +465,9 @@ impl State {
         let (Some((x, y)), Some(pointer)) = (self.pointer.position(), &self.wayland.pointer) else {
             return;
         };
-        let cursor = self.draw.cursor(
-            Point::new(x as f32, y as f32),
-            self.pointer.temporary_eraser(),
-        );
+        let cursor = self
+            .draw
+            .cursor(Point::new(x as f32, y as f32), self.pointer.tool_override());
         self.pointer
             .refresh_cursor(pointer, &self.wayland.shm, &self.qhandle, cursor);
     }

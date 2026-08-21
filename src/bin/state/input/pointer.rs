@@ -12,7 +12,7 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::
 
 use super::super::State;
 use super::super::cursor::CursorSurface;
-use super::super::draw::{Action, Cursor, CursorHint, Modifiers};
+use super::super::draw::{Action, Cursor, CursorHint, Modifiers, ToolOverride};
 use super::short_click;
 
 const EVDEV_LEFT: u32 = 272;
@@ -71,8 +71,8 @@ impl PointerState {
         self.position
     }
 
-    pub(in crate::state) fn temporary_eraser(&self) -> bool {
-        self.middle_button_held
+    pub(in crate::state) fn tool_override(&self) -> ToolOverride {
+        ToolOverride::from_eraser(self.middle_button_held)
     }
 
     pub(in crate::state) fn refresh_cursor(
@@ -295,7 +295,7 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                             })
                     });
                 if !double_click || !state.double_click_at(pos) {
-                    state.pointer_down(pos, modifiers, false);
+                    state.pointer_down(pos, modifiers, ToolOverride::None);
                 }
                 state.pointer.last_left_click = sequence
                     .left_press_time
@@ -330,7 +330,7 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                     && distance_squared(pos, start) > CLICK_SLOP_SQUARED
                 {
                     state.pointer.middle_dragging = true;
-                    state.pointer_down(start, modifiers, true);
+                    state.pointer_down(start, modifiers, ToolOverride::Eraser);
                 }
                 if (state.draw.picker_active()
                     || state.pointer.left_button_held

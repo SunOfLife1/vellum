@@ -18,6 +18,26 @@ pub(super) use self::scene::Point;
 pub(crate) use self::selection::CursorHint;
 pub(crate) use self::tool::Tool;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ToolOverride {
+    #[default]
+    None,
+    Eraser,
+}
+
+impl ToolOverride {
+    pub(crate) fn from_eraser(enabled: bool) -> Self {
+        if enabled { Self::Eraser } else { Self::None }
+    }
+
+    fn effective_tool(self, active: Tool) -> Tool {
+        match self {
+            Self::None => active,
+            Self::Eraser => Tool::Eraser,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ToolCursor {
     pub tool: Tool,
@@ -138,9 +158,9 @@ impl DrawState {
         &mut self,
         point: Point,
         modifiers: Modifiers,
-        temporary_eraser: bool,
+        tool_override: ToolOverride,
     ) -> bool {
-        let damage = self.editor.pointer_down(point, modifiers, temporary_eraser);
+        let damage = self.editor.pointer_down(point, modifiers, tool_override);
         if self.editor.is_editing_text() {
             self.show_caret();
         } else {
@@ -163,8 +183,8 @@ impl DrawState {
         self.editor.picker_active()
     }
 
-    pub fn cursor(&self, point: Point, temporary_eraser: bool) -> Cursor {
-        self.editor.cursor(point, temporary_eraser)
+    pub fn cursor(&self, point: Point, tool_override: ToolOverride) -> Cursor {
+        self.editor.cursor(point, tool_override)
     }
 
     pub fn open_picker(&mut self, center: Point) -> bool {

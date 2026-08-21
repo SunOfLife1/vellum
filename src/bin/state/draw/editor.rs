@@ -7,7 +7,7 @@ use super::selection::{self, Handle};
 pub(crate) use super::text_edit::CursorMove;
 use super::text_edit::TextEdit;
 use super::tool::{DEFAULT_ERASER_WIDTH, DEFAULT_TEXT_SIZE, Tool, ToolProperties, ToolPropertySet};
-use super::{Cursor, MIN_ERASER_WIDTH, Modifiers, ToolCursor};
+use super::{Cursor, MIN_ERASER_WIDTH, Modifiers, ToolCursor, ToolOverride};
 use crate::render::Geometry;
 
 const MIN_STROKE_WIDTH: f32 = 1.0;
@@ -331,15 +331,16 @@ impl Editor {
         &mut self,
         point: Point,
         modifiers: Modifiers,
-        temporary_eraser: bool,
+        tool_override: ToolOverride,
     ) -> Damage {
         let previous = self.finish_interaction();
-        if temporary_eraser || self.tool == Tool::Eraser {
+        let effective_tool = tool_override.effective_tool(self.tool);
+        if effective_tool == Tool::Eraser {
             self.interaction = Some(Interaction::Erasing);
             return previous.max(Damage::from_scene(self.erase_at(point)));
         }
 
-        match self.tool {
+        match effective_tool {
             Tool::Pen => {
                 self.interaction = Some(Interaction::Freehand(freehand::LiveStroke::new(
                     point, self.style,
@@ -348,7 +349,7 @@ impl Editor {
             }
             Tool::Line | Tool::Arrow | Tool::Triangle | Tool::Rectangle | Tool::Ellipse => {
                 self.interaction = Some(Interaction::Drawing {
-                    tool: self.tool,
+                    tool: effective_tool,
                     start: point,
                     current: point,
                     modifiers,
@@ -1046,9 +1047,10 @@ impl Editor {
         selection::hit_handle(&element.kind, element.style, element.bounds, point)
     }
 
-    pub fn cursor(&self, point: Point, temporary_eraser: bool) -> Cursor {
-        if temporary_eraser {
-            return self.tool_cursor(Tool::Eraser);
+    pub fn cursor(&self, point: Point, tool_override: ToolOverride) -> Cursor {
+        let effective_tool = tool_override.effective_tool(self.tool);
+        if tool_override == ToolOverride::Eraser {
+            return self.tool_cursor(effective_tool);
         }
         match &self.interaction {
             Some(
@@ -1068,17 +1070,17 @@ impl Editor {
         if self.picker.is_some() {
             return Cursor::Shape(selection::CursorHint::Crosshair);
         }
-        if self.tool == Tool::Text {
+        if effective_tool == Tool::Text {
             return Cursor::Shape(selection::CursorHint::Text);
         }
         if matches!(
-            self.tool,
+            effective_tool,
             Tool::Line | Tool::Arrow | Tool::Triangle | Tool::Rectangle | Tool::Ellipse
         ) {
             return Cursor::Shape(selection::CursorHint::Crosshair);
         }
-        if self.tool != Tool::Select {
-            return self.tool_cursor(self.tool);
+        if effective_tool != Tool::Select {
+            return self.tool_cursor(effective_tool);
         }
         if self.selected.len() != 1 {
             return Cursor::Shape(selection::CursorHint::Crosshair);
