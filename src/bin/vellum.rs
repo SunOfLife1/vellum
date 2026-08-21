@@ -34,6 +34,7 @@ struct FileConfig {
     default_color: Option<String>,
     palette: Option<Vec<String>>,
     feedback_duration_ms: Option<u64>,
+    clear_on_escape: Option<bool>,
 }
 
 struct Settings {
@@ -44,6 +45,7 @@ struct Settings {
     remember_last_tool: bool,
     palette: Vec<Rgb>,
     feedback_duration: Duration,
+    clear_on_escape: bool,
 }
 
 impl Settings {
@@ -102,6 +104,7 @@ impl Settings {
             remember_last_tool: file.remember_last_tool.unwrap_or(true),
             palette,
             feedback_duration: Duration::from_millis(feedback_duration_ms),
+            clear_on_escape: file.clear_on_escape.unwrap_or(false),
         })
     }
 }

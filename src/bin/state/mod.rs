@@ -186,6 +186,7 @@ impl Dispatch<WlRegistry, QueueHandle<State>> for SetupWaylandState {
 
 pub struct State {
     active: bool,
+    clear_on_escape: bool,
     frame_pending: bool,
     pending_pen_motion: Option<(Point, Modifiers)>,
 
@@ -223,6 +224,7 @@ impl State {
 
         let mut state = Self {
             active: false,
+            clear_on_escape: settings.clear_on_escape,
             frame_pending: false,
             pending_pen_motion: None,
             wayland: wayland_state,
@@ -318,11 +320,15 @@ impl State {
     }
 
     fn apply_action(&mut self, action: Action) {
+        let clear_on_escape = self.clear_on_escape && matches!(action, Action::Cancel);
         let effect = self.draw.handle_action(action);
         if effect.damage.changed() {
             self.request_render();
         }
         if effect.deactivate {
+            if clear_on_escape {
+                self.clear();
+            }
             self.deactivate();
         }
     }

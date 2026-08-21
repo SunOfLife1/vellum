@@ -15,6 +15,7 @@ to load no file.
 | `default_color` | string | First palette color | Initial `#RRGGBB` color; must be present in `palette` |
 | `palette` | array of strings | Eight standard colors | Between 2 and 12 `#RRGGBB` colors |
 | `feedback_duration_ms` | integer | `500` | How long property feedback remains visible, from `0` to `60000` milliseconds |
+| `clear_on_escape` | boolean | `false` | Clear annotations when Escape deactivates drawing mode |
 
 ## Defaults
 
@@ -24,6 +25,7 @@ remember_last_tool = true
 stroke_width = 5.0
 default_color = "#E84046"
 feedback_duration_ms = 500
+clear_on_escape = false
 palette = [
   "#E84046",
   "#EC8948",
