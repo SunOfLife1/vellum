@@ -401,14 +401,11 @@ fn constrained_triangle_vertex(
         }
         (true, true) => {
             let equilateral_height = edge_length * 3.0_f32.sqrt() * 0.5;
-            let right_isosceles_height = edge_length * 0.5;
             nearest_point(
                 target,
                 [
                     midpoint + normal * equilateral_height,
                     midpoint - normal * equilateral_height,
-                    midpoint + normal * right_isosceles_height,
-                    midpoint - normal * right_isosceles_height,
                     first + normal * edge_length,
                     first - normal * edge_length,
                     second + normal * edge_length,
