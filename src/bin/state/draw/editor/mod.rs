@@ -3,7 +3,9 @@ mod interaction;
 mod properties;
 
 use self::interaction::Interaction;
-use self::properties::{DEFAULT_ERASER_WIDTH, DEFAULT_TEXT_SIZE, ToolPropertySet};
+use self::properties::{
+    DEFAULT_ERASER_WIDTH, DEFAULT_TEXT_SIZE, MAX_STROKE_WIDTH, MIN_STROKE_WIDTH, ToolPropertySet,
+};
 use super::Modifiers;
 use super::history::{Entry as HistoryEntry, History};
 use super::picker::{Choice, Picker, ShapeFills, choice, picker_geometry};
@@ -14,9 +16,6 @@ pub(crate) use super::text_edit::CursorMove;
 use super::text_edit::TextEdit;
 use super::tool::Tool;
 use crate::render::Geometry;
-
-const MIN_STROKE_WIDTH: f32 = 1.0;
-const MAX_STROKE_WIDTH: f32 = 64.0;
 
 pub(crate) enum Action {
     Undo,

@@ -3,8 +3,8 @@ use super::super::scene::{ElementKind, Style, default_roundness};
 use super::super::tool::Tool;
 use super::{Damage, Editor, HistoryEntry, Interaction};
 
-const MIN_STROKE_WIDTH: f32 = 1.0;
-const MAX_STROKE_WIDTH: f32 = 64.0;
+pub(super) const MIN_STROKE_WIDTH: f32 = 1.0;
+pub(super) const MAX_STROKE_WIDTH: f32 = 64.0;
 const MIN_OPACITY: f32 = 0.05;
 const MIN_FONT_SIZE: f32 = 8.0;
 const MAX_FONT_SIZE: f32 = 192.0;
