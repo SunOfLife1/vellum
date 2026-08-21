@@ -283,6 +283,19 @@ impl DrawState {
                 caret = Some((key, edit.cursor, edit.origin, edit.font_size));
             }
             if let Some((content, at)) = &self.feedback {
+                for (index, [x, y]) in [[15.0, 16.0], [17.0, 16.0], [16.0, 15.0], [16.0, 17.0]]
+                    .into_iter()
+                    .enumerate()
+                {
+                    text_specs.push(TextSpec {
+                        key: u64::MAX - 34 + index as u64,
+                        content,
+                        left: at.x + x,
+                        top: at.y + y,
+                        size: 18.0,
+                        color: [0.0, 0.0, 0.0, 0.9],
+                    });
+                }
                 text_specs.push(TextSpec {
                     key: u64::MAX - 30,
                     content,

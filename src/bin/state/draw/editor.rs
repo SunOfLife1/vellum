@@ -20,18 +20,18 @@ const PROPERTY_COUNT: usize = 7;
 const TEXT_SLOT: usize = PROPERTY_COUNT - 1;
 
 fn stroke_size_label(value: f32, default: f32) -> String {
-    let suffix = if value == default { " (default)" } else { "" };
-    format!("Stroke {value:.1} px{suffix}")
+    let suffix = if value == default { " · default" } else { "" };
+    format!("{value:.1} px{suffix}")
 }
 
 fn text_size_label(value: f32, default: f32) -> String {
-    let suffix = if value == default { " (default)" } else { "" };
-    format!("Text {value:.0} px{suffix}")
+    let suffix = if value == default { " · default" } else { "" };
+    format!("{value:.0} px{suffix}")
 }
 
-fn percent_label(name: &str, value: f32, default: f32) -> String {
-    let suffix = if value == default { " (default)" } else { "" };
-    format!("{name} {:.0}%{suffix}", value * 100.0)
+fn percent_label(value: f32, default: f32) -> String {
+    let suffix = if value == default { " · default" } else { "" };
+    format!("{:.0}%{suffix}", value * 100.0)
 }
 
 fn stepped_size(value: f32, default: f32, steps: f32, increment: f32, min: f32, max: f32) -> f32 {
@@ -898,7 +898,7 @@ impl Editor {
                 return (Damage::None, String::new());
             }
             edit.style.color[3] = opacity;
-            return (Damage::Preview, percent_label("Opacity", opacity, 1.0));
+            return (Damage::Preview, percent_label(opacity, 1.0));
         }
         if self.selected.is_empty() {
             let Some((slot, _)) = self.tool.properties() else {
@@ -912,14 +912,11 @@ impl Editor {
             properties.opacity = opacity;
             self.style.color[3] = opacity;
             let damage = self.update_live_stroke_style();
-            return (
-                damage.max(Damage::Preview),
-                percent_label("Opacity", opacity, 1.0),
-            );
+            return (damage.max(Damage::Preview), percent_label(opacity, 1.0));
         }
         self.adjust_selected(|_, style| {
             style.color[3] = stepped_size(style.color[3], 1.0, steps, 0.05, MIN_OPACITY, 1.0);
-            Some(percent_label("Opacity", style.color[3], 1.0))
+            Some(percent_label(style.color[3], 1.0))
         })
     }
 
@@ -941,13 +938,13 @@ impl Editor {
             let damage = self.update_live_stroke_style();
             return (
                 damage.max(Damage::Preview),
-                percent_label("Roundness", roundness, default),
+                percent_label(roundness, default),
             );
         }
         self.adjust_selected(|kind, style| {
             let default = default_roundness(kind)?;
             style.roundness = stepped_size(style.roundness, default, steps, 0.1, 0.0, 1.0);
-            Some(percent_label("Roundness", style.roundness, default))
+            Some(percent_label(style.roundness, default))
         })
     }
 
