@@ -12,6 +12,7 @@ use crate::render::Geometry;
 
 const MIN_STROKE_WIDTH: f32 = 1.0;
 const MAX_STROKE_WIDTH: f32 = 64.0;
+const DEFAULT_ERASER_WIDTH: f32 = 10.0;
 const MIN_OPACITY: f32 = 0.05;
 const MIN_FONT_SIZE: f32 = 8.0;
 const MAX_FONT_SIZE: f32 = 192.0;
@@ -191,7 +192,7 @@ impl Editor {
         let (eraser_slot, _) = Tool::Eraser
             .properties()
             .expect("eraser must have adjustable properties");
-        tool_properties[eraser_slot].size = width.max(MIN_ERASER_WIDTH);
+        tool_properties[eraser_slot].size = DEFAULT_ERASER_WIDTH;
         tool_properties[TEXT_SLOT].size = text_size;
         let active = default_tool
             .properties()
@@ -200,7 +201,7 @@ impl Editor {
             tool: default_tool,
             style: Style {
                 width: if default_tool == Tool::Eraser {
-                    width.max(MIN_ERASER_WIDTH)
+                    DEFAULT_ERASER_WIDTH
                 } else {
                     width
                 },
@@ -950,7 +951,11 @@ impl Editor {
             } else {
                 MIN_STROKE_WIDTH
             };
-            let default = self.default_width.max(minimum);
+            let default = if self.tool == Tool::Eraser {
+                DEFAULT_ERASER_WIDTH
+            } else {
+                self.default_width
+            };
             let properties = &mut self.tool_properties[slot];
             properties.size = stepped_size(
                 properties.size,
@@ -1133,9 +1138,20 @@ impl Editor {
     fn tool_cursor(&self, tool: Tool) -> Cursor {
         Cursor::Tool(ToolCursor {
             tool,
-            width: self.style.width,
+            width: if tool == Tool::Eraser {
+                self.eraser_width()
+            } else {
+                self.style.width
+            },
             color: self.style.color,
         })
+    }
+
+    fn eraser_width(&self) -> f32 {
+        let (slot, _) = Tool::Eraser
+            .properties()
+            .expect("eraser must have adjustable properties");
+        self.tool_properties[slot].size
     }
 
     pub fn hit_test(&self, point: Point) -> Option<ElementId> {
@@ -1247,7 +1263,7 @@ impl Editor {
     }
 
     fn erase_at(&mut self, point: Point) -> bool {
-        let radius = super::eraser_radius(self.style.width);
+        let radius = super::eraser_radius(self.eraser_width());
         let hit = self
             .elements
             .iter()
