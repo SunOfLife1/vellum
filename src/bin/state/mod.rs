@@ -219,12 +219,11 @@ impl State {
         let wayland_state = tmp_wayland_state
             .into_state(connection, display, &qhandle)
             .map_err(str::to_string)?;
-        wayland_state.surface.frame(&event_queue.handle(), ());
         wayland_state.surface.commit();
 
         let mut state = Self {
             active: false,
-            frame_pending: true,
+            frame_pending: false,
             pending_pen_motion: None,
             wayland: wayland_state,
             draw: draw::DrawState::new(
@@ -296,7 +295,7 @@ impl State {
         if preview_changed {
             self.request_render();
         } else if let Some(wgpu) = &mut self.wgpu {
-            wgpu.release_render_target();
+            wgpu.release_picker_target();
         }
     }
 
@@ -304,7 +303,7 @@ impl State {
         if let Some(wgpu) = &mut self.wgpu {
             self.draw.render(wgpu);
             if !self.active {
-                wgpu.release_render_target();
+                wgpu.release_picker_target();
             }
         }
     }
@@ -313,7 +312,7 @@ impl State {
         if let Some(wgpu) = &mut self.wgpu {
             self.draw.force_render(wgpu);
             if !self.active {
-                wgpu.release_render_target();
+                wgpu.release_picker_target();
             }
         }
     }
@@ -371,9 +370,9 @@ impl State {
             }
             return;
         }
-        // Excalidraw likewise keeps only the latest pen point per display frame.
-        // Besides avoiding needless tessellation, this makes streamlining
-        // independent of the mouse's polling rate.
+        // Keep freehand smoothing independent of the input device's polling rate.
+        // The first point is consumed immediately by request_render; while that
+        // presentation is pending, newer motion replaces the unrendered point.
         if self.draw.is_drawing_pen() {
             self.pending_pen_motion = Some((point, modifiers));
             self.request_render();
@@ -439,9 +438,18 @@ impl State {
         if self.frame_pending {
             return;
         }
+        self.flush_pen_motion();
+        if self.wgpu.is_none() || !self.needs_frame() {
+            return;
+        }
         self.wayland.surface.frame(&self.qhandle, ());
-        self.wayland.surface.commit();
         self.frame_pending = true;
+        self.render();
+        // A successful presentation commits the frame request with its buffer.
+        // If acquisition failed, commit the callback alone so it can retry.
+        if self.needs_frame() {
+            self.wayland.surface.commit();
+        }
     }
 
     fn flush_pen_motion(&mut self) {
@@ -558,7 +566,6 @@ impl Dispatch<WlCallback, ()> for State {
         if let Event::Done { callback_data: _ } = event {
             state.frame_pending = false;
             state.flush_pen_motion();
-            state.render();
             if state.needs_frame() {
                 state.request_render();
             }

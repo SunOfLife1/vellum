@@ -1,6 +1,6 @@
 use super::Modifiers;
-use super::scene::{Bounds, ElementKind, Point, Style, rendered_path_endpoints, tessellate};
-use crate::render::{Geometry, Vertex};
+use super::scene::{Bounds, ElementKind, Point, Style, geometry, rendered_path_endpoints};
+use crate::render::{FillRule, Geometry};
 
 const SNAP_STEP: f32 = std::f32::consts::FRAC_PI_4;
 const ENDPOINT_HIT_RADIUS: f32 = 9.0;
@@ -78,7 +78,7 @@ pub(super) fn hit_handle(
 }
 
 pub(super) fn outline(min: Point, max: Point) -> Geometry {
-    tessellate(
+    geometry(
         &ElementKind::Rectangle {
             min: Point::new(min.x - GAP, min.y - GAP),
             max: Point::new(max.x + GAP, max.y + GAP),
@@ -142,27 +142,19 @@ fn outline_handle(kind: &ElementKind, bounds: Bounds, point: Point) -> Option<Ha
 }
 
 fn endpoint_geometry(center: Point) -> Geometry {
-    const SEGMENTS: u32 = 16;
-    let mut buffers = lyon_tessellation::VertexBuffers::new();
-    buffers
-        .vertices
-        .push(Vertex::at([center.x, center.y], HANDLE_FILL));
-    for index in 0..=SEGMENTS {
-        let angle = std::f32::consts::TAU * index as f32 / SEGMENTS as f32;
-        buffers.vertices.push(Vertex::at(
-            [
-                center.x + VISUAL_RADIUS * angle.cos(),
-                center.y + VISUAL_RADIUS * angle.sin(),
-            ],
-            HANDLE_FILL,
-        ));
-    }
-    for index in 0..SEGMENTS {
-        buffers.indices.extend([0, index + 1, index + 2]);
-    }
-    let mut geometry = Geometry::new(buffers);
+    use kurbo::Shape;
+
+    let mut output = Geometry::fill(
+        kurbo::Circle::new(
+            (f64::from(center.x), f64::from(center.y)),
+            f64::from(VISUAL_RADIUS),
+        )
+        .to_path(0.05),
+        FillRule::NonZero,
+        HANDLE_FILL,
+    );
     let radius = VISUAL_RADIUS - SELECTION_WIDTH * 0.5;
-    geometry.append(tessellate(
+    output.append(geometry(
         &ElementKind::Ellipse {
             center,
             radii: Point::new(radius, radius),
@@ -173,7 +165,7 @@ fn endpoint_geometry(center: Point) -> Geometry {
             roundness: 0.0,
         },
     ));
-    geometry
+    output
 }
 
 pub(super) fn resize(

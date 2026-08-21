@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use glyphon::{
-    Attrs, Buffer, Cache, Color, Cursor, Edit, Editor, Family, FontSystem, Metrics, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Wrap,
+use cosmic_text::{
+    Attrs, Buffer, Cursor, Edit, Editor, Family, FontSystem, Metrics, Shaping, Wrap, fontdb,
 };
+
+use super::vello_color;
 
 pub struct TextSpec<'a> {
     pub key: u64,
@@ -22,46 +23,33 @@ struct CachedText {
     buffer: Buffer,
 }
 
+struct PreparedText {
+    key: u64,
+    left: f32,
+    top: f32,
+    color: [f32; 4],
+}
+
 pub(super) struct TextState {
     font_system: FontSystem,
-    swash_cache: SwashCache,
-    viewport: Viewport,
-    atlas: TextAtlas,
-    renderer: TextRenderer,
+    font_cache: HashMap<fontdb::ID, peniko::FontData>,
     buffers: HashMap<u64, CachedText>,
+    prepared_text: Vec<PreparedText>,
     prepared: u64,
 }
 
 impl TextState {
-    pub(super) fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-    ) -> Self {
-        let cache = Cache::new(device);
-        let viewport = Viewport::new(device, &cache);
-        let mut atlas = TextAtlas::new(device, queue, &cache, format);
-        let renderer =
-            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+    pub(super) fn new() -> Self {
         Self {
             font_system: FontSystem::new(),
-            swash_cache: SwashCache::new(),
-            viewport,
-            atlas,
-            renderer,
+            font_cache: HashMap::new(),
             buffers: HashMap::new(),
+            prepared_text: Vec::new(),
             prepared: 0,
         }
     }
 
-    pub(super) fn prepare(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-        specs: &[TextSpec<'_>],
-    ) {
+    pub(super) fn prepare(&mut self, width: u32, height: u32, specs: &[TextSpec<'_>]) {
         let mut hasher = DefaultHasher::new();
         (width, height).hash(&mut hasher);
         for spec in specs {
@@ -79,7 +67,6 @@ impl TextState {
             return;
         }
 
-        self.viewport.update(queue, Resolution { width, height });
         self.buffers
             .retain(|key, _| specs.iter().any(|spec| spec.key == *key));
 
@@ -118,34 +105,72 @@ impl TextState {
             }
         }
 
-        let areas = specs.iter().filter_map(|spec| {
-            self.buffers.get(&spec.key).map(|cached| TextArea {
-                buffer: &cached.buffer,
+        self.prepared_text.clear();
+        self.prepared_text
+            .extend(specs.iter().map(|spec| PreparedText {
+                key: spec.key,
                 left: spec.left,
                 top: spec.top,
-                scale: 1.0,
-                bounds: TextBounds {
-                    left: 0,
-                    top: 0,
-                    right: width as i32,
-                    bottom: height as i32,
-                },
-                default_color: color(spec.color),
-                custom_glyphs: &[],
-            })
-        });
-        self.renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                areas,
-                &mut self.swash_cache,
-            )
-            .expect("prepare annotation text");
+                color: spec.color,
+            }));
         self.prepared = prepared;
+    }
+
+    pub(super) fn append_to_scene(
+        &mut self,
+        scene: &mut vello_hybrid::Scene,
+        resources: &mut vello_hybrid::Resources,
+        target_is_srgb: bool,
+    ) {
+        let Self {
+            font_system,
+            font_cache,
+            buffers,
+            prepared_text,
+            ..
+        } = self;
+
+        for prepared in prepared_text {
+            let Some(cached) = buffers.get(&prepared.key) else {
+                continue;
+            };
+            for run in cached.buffer.layout_runs() {
+                for glyphs in run.glyphs.chunk_by(|left, right| {
+                    left.font_id == right.font_id
+                        && left.font_size.to_bits() == right.font_size.to_bits()
+                        && left.font_weight == right.font_weight
+                        && left.color_opt == right.color_opt
+                }) {
+                    let Some(first) = glyphs.first() else {
+                        continue;
+                    };
+                    let color = first.color_opt.map_or(prepared.color, |color| {
+                        color.as_rgba().map(|channel| f32::from(channel) / 255.0)
+                    });
+                    scene.set_paint(vello_color(color, target_is_srgb));
+                    let font_data = font_cache.entry(first.font_id).or_insert_with(|| {
+                        font_system
+                            .db()
+                            .with_face_data(first.font_id, |data, index| {
+                                peniko::FontData::new(data.to_vec().into(), index)
+                            })
+                            .expect("load shaped annotation font")
+                    });
+                    let left = prepared.left;
+                    let baseline = prepared.top + run.line_y;
+                    scene
+                        .glyph_run(resources, font_data)
+                        .font_size(first.font_size)
+                        .hint(true)
+                        .atlas_cache(true)
+                        .fill_glyphs(glyphs.iter().map(move |glyph| glifo::Glyph {
+                            id: u32::from(glyph.glyph_id),
+                            x: left + glyph.x + glyph.font_size * glyph.x_offset,
+                            y: baseline - glyph.font_size * glyph.y_offset,
+                        }));
+                }
+            }
+        }
     }
 
     pub(super) fn layout_size(&self, key: u64) -> Option<[f32; 2]> {
@@ -158,24 +183,4 @@ impl TextState {
         editor.set_cursor(Cursor::new(0, index));
         editor.cursor_position().map(|(x, _)| x as f32)
     }
-
-    pub(super) fn render<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
-        self.renderer
-            .render(&self.atlas, &self.viewport, pass)
-            .expect("render annotation text");
-    }
-
-    pub(super) fn trim(&mut self) {
-        self.atlas.trim();
-    }
-}
-
-fn color(color: [f32; 4]) -> Color {
-    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color::rgba(
-        channel(color[0]),
-        channel(color[1]),
-        channel(color[2]),
-        channel(color[3]),
-    )
 }

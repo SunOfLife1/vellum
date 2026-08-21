@@ -2,7 +2,7 @@ use super::Modifiers;
 use super::freehand;
 use super::history::{Entry as HistoryEntry, History};
 use super::picker::{Choice, Picker, choice, picker_geometry};
-use super::scene::{Element, HIT_SLOP, default_roundness, tessellate};
+use super::scene::{Element, HIT_SLOP, default_roundness, geometry};
 use super::scene::{ElementId, ElementKind, EndMarker, Point, Style};
 use super::selection::{self, Handle};
 pub(crate) use super::text_edit::CursorMove;
@@ -247,6 +247,10 @@ impl Editor {
         matches!(self.interaction, Some(Interaction::EditingText(_)))
     }
 
+    pub fn is_drawing_pen(&self) -> bool {
+        matches!(self.interaction, Some(Interaction::Freehand(_)))
+    }
+
     fn text_edit(&self) -> Option<&TextEdit> {
         match &self.interaction {
             Some(Interaction::EditingText(edit)) => Some(edit),
@@ -259,10 +263,6 @@ impl Editor {
             Some(Interaction::EditingText(edit)) => Some(edit),
             _ => None,
         }
-    }
-
-    pub fn is_drawing_pen(&self) -> bool {
-        matches!(self.interaction, Some(Interaction::Freehand(_)))
     }
 
     pub fn current_color(&self) -> [f32; 4] {
@@ -621,7 +621,7 @@ impl Editor {
                 current,
                 modifiers,
                 style,
-            }) => output.push(tessellate(
+            }) => output.push(geometry(
                 &drawing_kind(*tool, *start, *current, *modifiers),
                 *style,
             )),
@@ -636,7 +636,7 @@ impl Editor {
             })),
             Some(Interaction::Resizing { id, current, .. }) => {
                 if let Some(element) = self.element(*id) {
-                    output.push(tessellate(current, element.style));
+                    output.push(geometry(current, element.style));
                 }
             }
             _ => {}

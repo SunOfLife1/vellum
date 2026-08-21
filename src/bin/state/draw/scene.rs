@@ -1,5 +1,5 @@
 use super::freehand;
-use crate::render::{Geometry, Vertex};
+use crate::render::{FillRule, Geometry, StrokeStyle};
 
 pub(super) const HIT_SLOP: f32 = 5.0;
 const POLYGON_CORNER_INSET: f32 = 0.3;
@@ -163,7 +163,7 @@ pub struct Element {
 
 impl Element {
     pub(super) fn new(id: ElementId, kind: ElementKind, style: Style) -> Self {
-        let geometry = tessellate(&kind, style);
+        let geometry = geometry(&kind, style);
         Self::with_geometry(id, kind, style, geometry)
     }
 
@@ -187,7 +187,7 @@ impl Element {
         let kind = std::mem::replace(&mut self.kind, kind);
         let style = std::mem::replace(&mut self.style, style);
         self.bounds = bounds_for(&self.kind, self.style.width);
-        self.geometry = tessellate(&self.kind, self.style);
+        self.geometry = geometry(&self.kind, self.style);
         (kind, style)
     }
 
@@ -313,20 +313,14 @@ pub(super) fn bounds_for(kind: &ElementKind, width: f32) -> Bounds {
             ),
         },
     };
-    bounds.expanded(if matches!(kind, ElementKind::Path { smooth: true, .. }) {
-        width * 0.8
-    } else {
-        width * 0.5
+    bounds.expanded(match kind {
+        ElementKind::Path { smooth: true, .. } => width * 0.8,
+        _ => width * 0.5,
     })
 }
 
-pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
-    use lyon_tessellation::path::Path;
-    use lyon_tessellation::path::Winding;
-    use lyon_tessellation::path::math::{Angle, point, vector};
-    use lyon_tessellation::{
-        BuffersBuilder, LineCap, LineJoin, StrokeOptions, StrokeTessellator, StrokeVertex,
-    };
+pub(super) fn geometry(kind: &ElementKind, style: Style) -> Geometry {
+    use kurbo::Shape;
 
     if let ElementKind::Path {
         points,
@@ -334,10 +328,10 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
         ..
     } = kind
     {
-        return freehand::tessellate(points, style);
+        return freehand::geometry(points, style);
     }
     if let ElementKind::Rectangle { min, max } = kind {
-        return tessellate_rectangle(*min, *max, style);
+        return rectangle_geometry(*min, *max, style);
     }
     let marker = match kind {
         ElementKind::Path {
@@ -347,7 +341,7 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
         } => path_endpoints(points).map(|(start, end)| arrow_head(start, end, style.width)),
         _ => None,
     };
-    let mut builder = Path::builder();
+    let mut path = kurbo::BezPath::new();
     let mut caps = Vec::new();
     match kind {
         ElementKind::Path {
@@ -371,9 +365,8 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
                     |head| head.base,
                 );
 
-                builder.begin(point(start_center.x, start_center.y));
-                builder.line_to(point(end_center.x, end_center.y));
-                builder.end(false);
+                path.move_to((f64::from(start_center.x), f64::from(start_center.y)));
+                path.line_to((f64::from(end_center.x), f64::from(end_center.y)));
                 caps.push((start_center, *start - *end, start_roundness));
                 if marker.is_none() {
                     caps.push((end_center, *end - *start, start_roundness));
@@ -383,31 +376,18 @@ pub(super) fn tessellate(kind: &ElementKind, style: Style) -> Geometry {
         ElementKind::Path { smooth: true, .. } => unreachable!(),
         ElementKind::Rectangle { .. } => unreachable!(),
         ElementKind::Ellipse { center, radii } => {
-            builder.add_ellipse(
-                point(center.x, center.y),
-                vector(radii.x, radii.y),
-                Angle::zero(),
-                Winding::Positive,
-            );
+            path = kurbo::Ellipse::new(
+                (f64::from(center.x), f64::from(center.y)),
+                (f64::from(radii.x), f64::from(radii.y)),
+                0.0,
+            )
+            .to_path(0.1);
         }
         ElementKind::Text { .. } => return Geometry::empty(),
     }
 
-    let path = builder.build();
-    let mut buffers = lyon_tessellation::VertexBuffers::new();
-    StrokeTessellator::new()
-        .tessellate_path(
-            &path,
-            &StrokeOptions::default()
-                .with_line_width(style.width)
-                .with_line_cap(LineCap::Butt)
-                .with_line_join(LineJoin::Miter),
-            &mut BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex| {
-                Vertex::at(vertex.position().to_array(), style.color)
-            }),
-        )
-        .expect("valid annotation path");
-    let mut geometry = Geometry::new(buffers);
+    let mut geometry =
+        Geometry::stroke(path, StrokeStyle::new(f64::from(style.width)), style.color);
     for (center, outward, roundness) in caps {
         geometry.append(freehand::rounded_cap(
             center,
@@ -468,8 +448,8 @@ fn rectangle_radius(min: Point, max: Point, roundness: f32) -> f32 {
     ((max.x - min.x).abs().min((max.y - min.y).abs()) * 0.5) * roundness
 }
 
-fn tessellate_rectangle(min: Point, max: Point, style: Style) -> Geometry {
-    use lyon_tessellation::{BuffersBuilder, FillOptions, FillRule, FillTessellator, FillVertex};
+fn rectangle_geometry(min: Point, max: Point, style: Style) -> Geometry {
+    use kurbo::Shape;
 
     let half = style.width * 0.5;
     let maximum = (max.x - min.x).abs().min((max.y - min.y).abs()) * 0.5;
@@ -490,36 +470,35 @@ fn tessellate_rectangle(min: Point, max: Point, style: Style) -> Geometry {
             (maximum - half).max(0.0) * style.roundness,
         ),
     ];
-    let mut builder = lyon_tessellation::path::Path::builder();
+    let mut path = kurbo::BezPath::new();
     for (min, max, radius) in contours {
         if min.x >= max.x || min.y >= max.y {
             continue;
         }
-        let bounds = lyon_tessellation::math::Box2D::new(
-            lyon_tessellation::math::point(min.x, min.y),
-            lyon_tessellation::math::point(max.x, max.y),
-        );
         if radius <= f32::EPSILON {
-            builder.add_rectangle(&bounds, lyon_tessellation::path::Winding::Positive);
+            path.extend(
+                kurbo::Rect::new(
+                    f64::from(min.x),
+                    f64::from(min.y),
+                    f64::from(max.x),
+                    f64::from(max.y),
+                )
+                .path_elements(0.1),
+            );
         } else {
-            builder.add_rounded_rectangle(
-                &bounds,
-                &lyon_tessellation::path::builder::BorderRadii::new(radius),
-                lyon_tessellation::path::Winding::Positive,
+            path.extend(
+                kurbo::RoundedRect::new(
+                    f64::from(min.x),
+                    f64::from(min.y),
+                    f64::from(max.x),
+                    f64::from(max.y),
+                    f64::from(radius),
+                )
+                .path_elements(0.1),
             );
         }
     }
-    let mut buffers = lyon_tessellation::VertexBuffers::new();
-    FillTessellator::new()
-        .tessellate_path(
-            &builder.build(),
-            &FillOptions::default().with_fill_rule(FillRule::EvenOdd),
-            &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex| {
-                Vertex::at(vertex.position().to_array(), style.color)
-            }),
-        )
-        .expect("valid rectangle");
-    Geometry::new(buffers)
+    Geometry::fill(path, FillRule::EvenOdd, style.color)
 }
 
 fn rounded_rectangle_hit(
@@ -571,8 +550,8 @@ struct ArrowHead {
 }
 
 impl ArrowHead {
-    fn rendered_tip(self, roundness: f32) -> Point {
-        self.vertices[0] + (self.base - self.vertices[0]) * (POLYGON_CORNER_INSET * roundness * 0.5)
+    fn rendered_tip(self, _roundness: f32) -> Point {
+        self.vertices[0]
     }
 }
 
@@ -604,45 +583,37 @@ fn arrow_head(start: Point, end: Point, width: f32) -> ArrowHead {
 }
 
 fn rounded_triangle(vertices: &[Point; 3], roundness: f32, color: [f32; 4]) -> Geometry {
-    use lyon_tessellation::path::Path;
-    use lyon_tessellation::path::math::point;
-    use lyon_tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex};
+    let mut path = kurbo::BezPath::new();
+    add_triangle_path(&mut path, vertices, roundness);
+    Geometry::fill(path, FillRule::NonZero, color)
+}
 
-    let mut builder = Path::builder();
-    if roundness <= f32::EPSILON {
-        builder.begin(point(vertices[0].x, vertices[0].y));
-        for vertex in &vertices[1..] {
-            builder.line_to(point(vertex.x, vertex.y));
-        }
-    } else {
-        let inset = POLYGON_CORNER_INSET * roundness;
-        let first = vertices[0];
-        let first_before = first + (vertices[vertices.len() - 1] - first) * inset;
-        builder.begin(point(first_before.x, first_before.y));
-        for index in 0..vertices.len() {
-            let vertex = vertices[index];
-            let next = vertices[(index + 1) % vertices.len()];
+fn add_triangle_path(path: &mut kurbo::BezPath, vertices: &[Point; 3], roundness: f32) {
+    let inset = POLYGON_CORNER_INSET * roundness;
+    let before = |index: usize| {
+        let vertex = vertices[index];
+        vertex + (vertices[(index + 2) % 3] - vertex) * inset
+    };
+    let first = before(0);
+    path.move_to((f64::from(first.x), f64::from(first.y)));
+    for index in 0..vertices.len() {
+        let vertex = vertices[index];
+        if inset > f32::EPSILON {
+            let next = vertices[(index + 1) % 3];
             let after = vertex + (next - vertex) * inset;
-            builder.quadratic_bezier_to(point(vertex.x, vertex.y), point(after.x, after.y));
-            let next_before = next + (vertex - next) * inset;
-            if index + 1 < vertices.len() {
-                builder.line_to(point(next_before.x, next_before.y));
-            }
+            let before = before(index);
+            let control = vertex * 2.0 - (before + after) * 0.5;
+            path.quad_to(
+                (f64::from(control.x), f64::from(control.y)),
+                (f64::from(after.x), f64::from(after.y)),
+            );
+        }
+        if index + 1 < vertices.len() {
+            let next = before(index + 1);
+            path.line_to((f64::from(next.x), f64::from(next.y)));
         }
     }
-    builder.close();
-
-    let mut buffers = lyon_tessellation::VertexBuffers::new();
-    FillTessellator::new()
-        .tessellate_path(
-            &builder.build(),
-            &FillOptions::default(),
-            &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex| {
-                Vertex::at(vertex.position().to_array(), color)
-            }),
-        )
-        .expect("valid rounded polygon");
-    Geometry::new(buffers)
+    path.close_path();
 }
 
 fn rounded_triangle_hit(

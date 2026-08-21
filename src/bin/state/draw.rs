@@ -7,7 +7,7 @@ mod selection;
 mod text_edit;
 mod tool;
 
-use crate::render::{Geometry, LocalGeometry, TextSpec, Vertex, WgpuState};
+use crate::render::{FillRule, Geometry, LocalGeometry, TextSpec, WgpuState};
 use std::time::{Duration, Instant};
 
 pub(crate) use self::editor::{Action, CursorMove};
@@ -232,7 +232,7 @@ impl DrawState {
             return;
         }
         if self.damage == Damage::Scene {
-            wgpu.upload_committed(
+            wgpu.set_committed_geometry(
                 self.editor
                     .elements()
                     .iter()
@@ -327,20 +327,32 @@ impl DrawState {
 }
 
 fn text_caret(left: f32, top: f32, font_size: f32) -> Geometry {
+    use kurbo::Shape;
+
     let bottom = top + font_size * 1.25;
     let black = [0.0, 0.0, 0.0, 1.0];
     let white = [1.0, 1.0, 1.0, 1.0];
-    Geometry::new(lyon_tessellation::VertexBuffers {
-        vertices: vec![
-            Vertex::at([left - 1.0, top - 1.0], black),
-            Vertex::at([left + 2.0, top - 1.0], black),
-            Vertex::at([left + 2.0, bottom + 1.0], black),
-            Vertex::at([left - 1.0, bottom + 1.0], black),
-            Vertex::at([left, top], white),
-            Vertex::at([left + 1.0, top], white),
-            Vertex::at([left + 1.0, bottom], white),
-            Vertex::at([left, bottom], white),
-        ],
-        indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
-    })
+    let mut geometry = Geometry::fill(
+        kurbo::Rect::new(
+            f64::from(left - 1.0),
+            f64::from(top - 1.0),
+            f64::from(left + 2.0),
+            f64::from(bottom + 1.0),
+        )
+        .to_path(0.1),
+        FillRule::NonZero,
+        black,
+    );
+    geometry.append(Geometry::fill(
+        kurbo::Rect::new(
+            f64::from(left),
+            f64::from(top),
+            f64::from(left + 1.0),
+            f64::from(bottom),
+        )
+        .to_path(0.1),
+        FillRule::NonZero,
+        white,
+    ));
+    geometry
 }

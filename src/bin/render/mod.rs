@@ -1,31 +1,82 @@
 mod text;
-mod vertex;
+
 pub use text::TextSpec;
-use text::TextState;
-use vertex::Uniform;
-pub use vertex::Vertex;
 
 use crate::cli::Backend;
-use lyon_tessellation::VertexBuffers;
+use kurbo::{Affine, BezPath, Cap, Join, Stroke};
+use text::TextState;
 use wayland_client::Proxy;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wgpu::util::DeviceExt;
 
-const INITIAL_BUFFER_SIZE: u64 = 4096;
-const RENDER_SCALE: u32 = 2;
-const PICKER_RENDER_SCALE: u32 = 4;
+const PICKER_RENDER_SCALE: u32 = 2;
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ResolveInfo {
-    origin: [f32; 2],
-    _padding: [f32; 2],
+#[derive(Debug, Clone, Copy)]
+pub enum FillRule {
+    NonZero,
+    EvenOdd,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct StrokeStyle {
+    pub width: f64,
+    pub join: Join,
+    pub start_cap: Cap,
+    pub end_cap: Cap,
+    pub miter_limit: f64,
+}
+
+impl StrokeStyle {
+    pub fn new(width: f64) -> Self {
+        Self {
+            width,
+            join: Join::Miter,
+            start_cap: Cap::Butt,
+            end_cap: Cap::Butt,
+            miter_limit: 4.0,
+        }
+    }
+
+    pub fn round(width: f64) -> Self {
+        Self {
+            width,
+            join: Join::Round,
+            start_cap: Cap::Round,
+            end_cap: Cap::Round,
+            miter_limit: 4.0,
+        }
+    }
+
+    fn as_kurbo(&self) -> Stroke {
+        Stroke {
+            width: self.width,
+            join: self.join,
+            miter_limit: self.miter_limit,
+            start_cap: self.start_cap,
+            end_cap: self.end_cap,
+            ..Stroke::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DrawCommand {
+    Fill {
+        path: BezPath,
+        fill_rule: FillRule,
+        color: [f32; 4],
+    },
+    Stroke {
+        path: BezPath,
+        stroke: StrokeStyle,
+        color: [f32; 4],
+    },
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct Geometry {
-    vertex_buffers: VertexBuffers<Vertex, u32>,
+    commands: Vec<DrawCommand>,
 }
 
 pub struct LocalGeometry {
@@ -45,88 +96,100 @@ impl LocalGeometry {
 }
 
 impl Geometry {
-    pub fn new(vertex_buffers: VertexBuffers<Vertex, u32>) -> Self {
-        Self { vertex_buffers }
+    pub fn empty() -> Self {
+        Self::default()
     }
 
-    pub fn empty() -> Self {
-        Self::new(VertexBuffers::new())
+    pub fn fill(path: BezPath, fill_rule: FillRule, color: [f32; 4]) -> Self {
+        Self {
+            commands: vec![DrawCommand::Fill {
+                path,
+                fill_rule,
+                color,
+            }],
+        }
+    }
+
+    pub fn stroke(path: BezPath, stroke: StrokeStyle, color: [f32; 4]) -> Self {
+        Self {
+            commands: vec![DrawCommand::Stroke {
+                path,
+                stroke,
+                color,
+            }],
+        }
     }
 
     pub fn append(&mut self, other: Self) {
-        let base = self.vertex_buffers.vertices.len() as u32;
-        self.vertex_buffers
-            .vertices
-            .extend(other.vertex_buffers.vertices);
-        self.vertex_buffers.indices.extend(
-            other
-                .vertex_buffers
-                .indices
-                .into_iter()
-                .map(|index| index + base),
-        );
+        self.commands.extend(other.commands);
     }
 
     pub fn translated(&self, offset: [f32; 2]) -> Self {
-        Self::new(VertexBuffers {
-            vertices: self
-                .vertex_buffers
-                .vertices
+        let transform = Affine::translate((f64::from(offset[0]), f64::from(offset[1])));
+        Self {
+            commands: self
+                .commands
                 .iter()
-                .map(|vertex| Vertex {
-                    position: [
-                        vertex.position[0] + offset[0],
-                        vertex.position[1] + offset[1],
-                    ],
-                    ..*vertex
+                .map(|command| match command {
+                    DrawCommand::Fill {
+                        path,
+                        fill_rule,
+                        color,
+                    } => DrawCommand::Fill {
+                        path: transform * path,
+                        fill_rule: *fill_rule,
+                        color: *color,
+                    },
+                    DrawCommand::Stroke {
+                        path,
+                        stroke,
+                        color,
+                    } => DrawCommand::Stroke {
+                        path: transform * path,
+                        stroke: stroke.clone(),
+                        color: *color,
+                    },
                 })
                 .collect(),
-            indices: self.vertex_buffers.indices.clone(),
-        })
+        }
     }
 
     fn is_empty(&self) -> bool {
-        self.vertex_buffers.indices.is_empty()
+        self.commands.is_empty()
     }
 }
 
-struct GrowingBuffer {
-    buffer: wgpu::Buffer,
-    capacity: u64,
-    usage: wgpu::BufferUsages,
-    label: &'static str,
-}
-
-struct RenderTarget {
+struct PickerTarget {
     _texture: wgpu::Texture,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
-    resolve_buffer: wgpu::Buffer,
-}
-
-struct PickerRenderTarget {
-    target: RenderTarget,
-    _screen_buffer: wgpu::Buffer,
-    screen_bind_group: wgpu::BindGroup,
+    composite_buffer: wgpu::Buffer,
     size: [u32; 2],
     origin: [f32; 2],
 }
 
-impl RenderTarget {
+fn composite_bytes(origin: [f32; 2]) -> [u8; 16] {
+    let mut bytes = [0; 16];
+    bytes[..4].copy_from_slice(&origin[0].to_ne_bytes());
+    bytes[4..8].copy_from_slice(&origin[1].to_ne_bytes());
+    bytes
+}
+
+impl PickerTarget {
     fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         size: [u32; 2],
-        scale: u32,
         origin: [f32; 2],
         layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-    ) -> Self {
+    ) -> Option<Self> {
+        let width = size[0].checked_mul(PICKER_RENDER_SCALE)?;
+        let height = size[1].checked_mul(PICKER_RENDER_SCALE)?;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("supersampled annotations"),
+            label: Some("picker target"),
             size: wgpu::Extent3d {
-                width: size[0] * scale,
-                height: size[1] * scale,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -137,16 +200,13 @@ impl RenderTarget {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let resolve_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("downsample dimensions"),
-            contents: bytemuck::bytes_of(&ResolveInfo {
-                origin,
-                _padding: [0.0; 2],
-            }),
+        let composite_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("picker composite origin"),
+            contents: &composite_bytes(origin),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("supersampled annotations"),
+            label: Some("picker composite"),
             layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -155,92 +215,18 @@ impl RenderTarget {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: resolve_buffer.as_entire_binding(),
+                    resource: composite_buffer.as_entire_binding(),
                 },
             ],
         });
-        Self {
+        Some(Self {
             _texture: texture,
             view,
             bind_group,
-            resolve_buffer,
-        }
-    }
-}
-
-impl PickerRenderTarget {
-    fn new(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        size: [u32; 2],
-        origin: [f32; 2],
-        screen_layout: &wgpu::BindGroupLayout,
-        downsample_layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-    ) -> Self {
-        let screen_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("picker dimensions"),
-            contents: bytemuck::bytes_of(&Uniform {
-                screen_size: [size[0] as f32, size[1] as f32],
-            }),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let screen_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("picker dimensions"),
-            layout: screen_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: screen_buffer.as_entire_binding(),
-            }],
-        });
-        Self {
-            target: RenderTarget::new(
-                device,
-                format,
-                size,
-                PICKER_RENDER_SCALE,
-                origin,
-                downsample_layout,
-                sampler,
-            ),
-            _screen_buffer: screen_buffer,
-            screen_bind_group,
+            composite_buffer,
             size,
             origin,
-        }
-    }
-}
-
-impl GrowingBuffer {
-    fn new(device: &wgpu::Device, usage: wgpu::BufferUsages, label: &'static str) -> Self {
-        Self {
-            buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: INITIAL_BUFFER_SIZE,
-                usage: usage | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            capacity: INITIAL_BUFFER_SIZE,
-            usage,
-            label,
-        }
-    }
-
-    fn ensure_capacity(&mut self, device: &wgpu::Device, required: u64) {
-        if required <= self.capacity {
-            return;
-        }
-        self.capacity = required.next_power_of_two().max(INITIAL_BUFFER_SIZE);
-        self.buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(self.label),
-            size: self.capacity,
-            usage: self.usage | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        })
     }
 }
 
@@ -249,23 +235,17 @@ pub struct WgpuState {
     surface_config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    render_pipeline: wgpu::RenderPipeline,
-    downsample_pipeline: wgpu::RenderPipeline,
-    picker_downsample_pipeline: wgpu::RenderPipeline,
-    downsample_layout: wgpu::BindGroupLayout,
-    downsample_sampler: wgpu::Sampler,
-    screen_layout: wgpu::BindGroupLayout,
-    render_target: Option<RenderTarget>,
-    picker_render_target: Option<PickerRenderTarget>,
-    committed_vertices: GrowingBuffer,
-    committed_indices: GrowingBuffer,
-    committed_index_count: u32,
-    preview_vertices: GrowingBuffer,
-    preview_indices: GrowingBuffer,
-    packed_vertices: Vec<Vertex>,
-    packed_indices: Vec<u32>,
-    screen_buffer: wgpu::Buffer,
-    screen_bind_group: wgpu::BindGroup,
+    main_renderer: vello_hybrid::Renderer,
+    main_resources: vello_hybrid::Resources,
+    picker_renderer: vello_hybrid::Renderer,
+    picker_resources: vello_hybrid::Resources,
+    main_scene: vello_hybrid::Scene,
+    picker_scene: vello_hybrid::Scene,
+    texture_bindings: vello_hybrid::TextureBindings,
+    committed: Geometry,
+    picker_composite_pipeline: wgpu::RenderPipeline,
+    picker_composite_layout: wgpu::BindGroupLayout,
+    picker_target: Option<PickerTarget>,
     text: Option<TextState>,
 }
 
@@ -277,14 +257,19 @@ impl WgpuState {
         height: u32,
         force_backend: Option<Backend>,
     ) -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: match force_backend {
-                Some(Backend::Vulkan) => wgpu::Backends::VULKAN,
-                Some(Backend::OpenGL) => wgpu::Backends::GL,
-                None => wgpu::Backends::all(),
-            },
-            ..Default::default()
-        });
+        let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        instance_descriptor.backends = match force_backend {
+            Some(Backend::Vulkan) => wgpu::Backends::VULKAN,
+            Some(Backend::OpenGL) => wgpu::Backends::GL,
+            None => wgpu::Backends::all(),
+        };
+        instance_descriptor.display = Some(Box::new(
+            display
+                .backend()
+                .upgrade()
+                .expect("live Wayland display backend"),
+        ));
+        let instance = wgpu::Instance::new(instance_descriptor);
 
         let raw_display_handle =
             wgpu::rwh::RawDisplayHandle::Wayland(wgpu::rwh::WaylandDisplayHandle::new(
@@ -296,7 +281,7 @@ impl WgpuState {
             ));
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle,
+                raw_display_handle: Some(raw_display_handle),
                 raw_window_handle,
             })
         }
@@ -336,192 +321,95 @@ impl WgpuState {
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
             alpha_mode,
             view_formats: vec![],
         };
         surface.configure(&device, &surface_config);
 
-        let uniform = Uniform {
-            screen_size: [width as f32, height as f32],
-        };
-        let screen_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("screen dimensions"),
-            contents: bytemuck::bytes_of(&uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("screen dimensions"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let screen_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("screen dimensions"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: screen_buffer.as_entire_binding(),
-            }],
-        });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("annotations.wgsl"));
-        let shader_constants = &[("target_is_srgb", format.is_srgb() as u8 as f64)];
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("annotation pipeline"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
-        });
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("annotation pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: shader_constants,
-                    ..Default::default()
-                },
-                buffers: &[Vertex::DESC],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let downsample_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("supersampled annotations"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+        let picker_composite_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("picker composite"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
-        let downsample_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("downsample sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let downsample_shader = device.create_shader_module(wgpu::include_wgsl!("downsample.wgsl"));
-        let downsample_pipeline_layout =
+                ],
+            });
+        let picker_composite_shader =
+            device.create_shader_module(wgpu::include_wgsl!("picker_composite.wgsl"));
+        let picker_composite_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("downsample pipeline"),
-                bind_group_layouts: &[&downsample_layout],
+                label: Some("picker composite pipeline"),
+                bind_group_layouts: &[Some(&picker_composite_layout)],
                 immediate_size: 0,
             });
-        let downsample_pipeline = create_downsample_pipeline(
+        let picker_composite_pipeline = create_picker_composite_pipeline(
             &device,
-            &downsample_pipeline_layout,
-            &downsample_shader,
+            &picker_composite_pipeline_layout,
+            &picker_composite_shader,
             format,
-            false,
-            RENDER_SCALE,
         );
-        let picker_downsample_pipeline = create_downsample_pipeline(
-            &device,
-            &downsample_pipeline_layout,
-            &downsample_shader,
+        let target_config = vello_hybrid::RenderTargetConfig {
             format,
-            true,
-            PICKER_RENDER_SCALE,
-        );
+            width: 1,
+            height: 1,
+        };
+        let mut main_settings = vello_hybrid::RenderSettings::default();
+        // Text is the main scene's only atlas user; 1024px avoids a 64 MiB first-use allocation.
+        main_settings.memory_settings.image_atlas_config.atlas_size = (1024, 1024);
+        let (main_renderer, main_resources) =
+            vello_hybrid::Renderer::new_with(&device, &target_config, main_settings);
+        let (picker_renderer, picker_resources) =
+            vello_hybrid::Renderer::new(&device, &target_config);
+
         Self {
             surface,
             surface_config,
-            committed_vertices: GrowingBuffer::new(
-                &device,
-                wgpu::BufferUsages::VERTEX,
-                "committed annotation vertices",
-            ),
-            committed_indices: GrowingBuffer::new(
-                &device,
-                wgpu::BufferUsages::INDEX,
-                "committed annotation indices",
-            ),
-            preview_vertices: GrowingBuffer::new(
-                &device,
-                wgpu::BufferUsages::VERTEX,
-                "preview vertices",
-            ),
-            preview_indices: GrowingBuffer::new(
-                &device,
-                wgpu::BufferUsages::INDEX,
-                "preview indices",
-            ),
-            committed_index_count: 0,
-            packed_vertices: Vec::new(),
-            packed_indices: Vec::new(),
-            render_pipeline,
-            downsample_pipeline,
-            picker_downsample_pipeline,
-            downsample_layout,
-            downsample_sampler,
-            screen_layout: bind_group_layout,
-            render_target: None,
-            picker_render_target: None,
-            screen_buffer,
-            screen_bind_group,
-            text: None,
             device,
             queue,
+            main_renderer,
+            main_resources,
+            picker_renderer,
+            picker_resources,
+            main_scene: vello_hybrid::Scene::new(1, 1),
+            picker_scene: vello_hybrid::Scene::new(1, 1),
+            texture_bindings: vello_hybrid::TextureBindings::new(),
+            committed: Geometry::empty(),
+            picker_composite_pipeline,
+            picker_composite_layout,
+            picker_target: None,
+            text: None,
         }
     }
 
-    pub fn upload_committed<'a>(&mut self, geometries: impl IntoIterator<Item = &'a Geometry>) {
-        self.committed_index_count = Self::upload_geometry(
-            &self.device,
-            &self.queue,
-            &mut self.committed_vertices,
-            &mut self.committed_indices,
-            geometries,
-            &mut self.packed_vertices,
-            &mut self.packed_indices,
-        );
+    pub fn set_committed_geometry<'a>(
+        &mut self,
+        geometries: impl IntoIterator<Item = &'a Geometry>,
+    ) {
+        self.committed.commands.clear();
+        for geometry in geometries {
+            self.committed
+                .commands
+                .extend(geometry.commands.iter().cloned());
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -534,29 +422,14 @@ impl WgpuState {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.render_target = None;
-        self.queue.write_buffer(
-            &self.screen_buffer,
-            0,
-            bytemuck::bytes_of(&Uniform {
-                screen_size: [width as f32, height as f32],
-            }),
-        );
     }
 
     pub fn prepare_text(&mut self, text_specs: &[TextSpec<'_>]) {
-        // Font discovery can be relatively slow, so do it before acquiring a swapchain image.
         if !text_specs.is_empty() && self.text.is_none() {
-            self.text = Some(TextState::new(
-                &self.device,
-                &self.queue,
-                self.surface_config.format,
-            ));
+            self.text = Some(TextState::new());
         }
         if let Some(text) = &mut self.text {
             text.prepare(
-                &self.device,
-                &self.queue,
                 self.surface_config.width,
                 self.surface_config.height,
                 text_specs,
@@ -573,87 +446,19 @@ impl WgpuState {
     }
 
     pub fn render(&mut self, previews: &[Geometry], picker: Option<&LocalGeometry>) -> bool {
-        let preview_index_count = previews
-            .iter()
-            .map(|geometry| geometry.vertex_buffers.indices.len() as u32)
-            .sum();
-        let total_index_count = Self::upload_geometry(
-            &self.device,
-            &self.queue,
-            &mut self.preview_vertices,
-            &mut self.preview_indices,
-            previews
-                .iter()
-                .chain(picker.into_iter().map(|picker| &picker.geometry)),
-            &mut self.packed_vertices,
-            &mut self.packed_indices,
-        );
-
-        self.render_surface(
-            preview_index_count,
-            total_index_count - preview_index_count,
-            picker,
-        )
+        self.render_surface(previews, picker)
     }
 
-    fn render_geometry(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        label: &'static str,
-        target: &wgpu::TextureView,
-        screen_bind_group: &wgpu::BindGroup,
-        committed: bool,
-        indices: std::ops::Range<u32>,
-    ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(label),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.render_pipeline);
-        pass.set_bind_group(0, screen_bind_group, &[]);
-        if committed {
-            draw_buffer(
-                &mut pass,
-                &self.committed_vertices.buffer,
-                &self.committed_indices.buffer,
-                0..self.committed_index_count,
-            );
-        }
-        draw_buffer(
-            &mut pass,
-            &self.preview_vertices.buffer,
-            &self.preview_indices.buffer,
-            indices,
-        );
-    }
-
-    fn downsample(
+    fn composite_picker(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         load: wgpu::LoadOp<wgpu::Color>,
-        source: &RenderTarget,
+        source: &PickerTarget,
         viewport: Option<[f32; 4]>,
-        exact: bool,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(if exact {
-                "downsample picker"
-            } else {
-                "downsample geometry"
-            }),
+            label: Some("composite picker"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
@@ -668,11 +473,7 @@ impl WgpuState {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(if exact {
-            &self.picker_downsample_pipeline
-        } else {
-            &self.downsample_pipeline
-        });
+        pass.set_pipeline(&self.picker_composite_pipeline);
         if let Some([x, y, width, height]) = viewport {
             pass.set_viewport(x, y, width, height, 0.0, 1.0);
         }
@@ -680,68 +481,92 @@ impl WgpuState {
         pass.draw(0..3, 0..1);
     }
 
-    fn render_surface(
-        &mut self,
-        preview_index_count: u32,
-        picker_index_count: u32,
-        picker: Option<&LocalGeometry>,
-    ) -> bool {
-        if self.render_target.is_none() {
-            self.render_target = Some(RenderTarget::new(
-                &self.device,
-                self.surface_config.format,
-                [self.surface_config.width, self.surface_config.height],
-                RENDER_SCALE,
-                [0.0; 2],
-                &self.downsample_layout,
-                &self.downsample_sampler,
-            ));
-        }
-        if let Some(picker) = picker
-            && self
-                .picker_render_target
-                .as_ref()
-                .is_none_or(|target| target.size != picker.size)
-        {
-            self.picker_render_target = Some(PickerRenderTarget::new(
-                &self.device,
-                self.surface_config.format,
-                picker.size,
-                picker.origin,
-                &self.screen_layout,
-                &self.downsample_layout,
-                &self.downsample_sampler,
-            ));
-        }
-        if let Some(picker) = picker {
-            let target = self.picker_render_target.as_mut().unwrap();
-            if target.origin != picker.origin {
-                self.queue.write_buffer(
-                    &target.target.resolve_buffer,
-                    0,
-                    bytemuck::bytes_of(&ResolveInfo {
-                        origin: picker.origin,
-                        _padding: [0.0; 2],
-                    }),
-                );
-                target.origin = picker.origin;
-            }
-        }
+    fn render_surface(&mut self, previews: &[Geometry], picker: Option<&LocalGeometry>) -> bool {
         let output = match self.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.surface_config);
                 match self.surface.get_current_texture() {
-                    Ok(output) => output,
-                    Err(error) => {
-                        eprintln!("vellum: surface retry failed: {error}");
+                    wgpu::CurrentSurfaceTexture::Success(output)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+                    status => {
+                        eprintln!("vellum: surface retry failed: {status:?}");
                         return false;
                     }
                 }
             }
-            Err(wgpu::SurfaceError::Timeout) => return false,
-            Err(error) => panic!("surface error: {error}"),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return false;
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                eprintln!("vellum: surface acquisition validation error");
+                return false;
+            }
         };
+
+        let Some(main_size) = checked_scene_size(
+            [self.surface_config.width, self.surface_config.height],
+            "annotation",
+        ) else {
+            return false;
+        };
+        self.main_scene.reset_and_resize(main_size[0], main_size[1]);
+        self.main_scene.set_transform(Affine::IDENTITY);
+        let target_is_srgb = self.surface_config.format.is_srgb();
+        replay_geometry(&mut self.main_scene, &self.committed, target_is_srgb);
+        for geometry in previews {
+            replay_geometry(&mut self.main_scene, geometry, target_is_srgb);
+        }
+        if let Some(text) = &mut self.text {
+            text.append_to_scene(
+                &mut self.main_scene,
+                &mut self.main_resources,
+                target_is_srgb,
+            );
+        }
+
+        let picker_size = if let Some(picker) = picker {
+            let Some(scene_size) = checked_picker_scene_size(picker.size) else {
+                return false;
+            };
+            if self
+                .picker_target
+                .as_ref()
+                .is_none_or(|target| target.size != picker.size)
+            {
+                self.picker_target = PickerTarget::new(
+                    &self.device,
+                    self.surface_config.format,
+                    picker.size,
+                    picker.origin,
+                    &self.picker_composite_layout,
+                );
+                if self.picker_target.is_none() {
+                    eprintln!("vellum: picker render target dimensions overflow");
+                    return false;
+                }
+            }
+            let target = self.picker_target.as_mut().unwrap();
+            if target.origin != picker.origin {
+                self.queue.write_buffer(
+                    &target.composite_buffer,
+                    0,
+                    &composite_bytes(picker.origin),
+                );
+                target.origin = picker.origin;
+            }
+            Some(scene_size)
+        } else {
+            None
+        };
+
+        if let (Some(picker), Some(size)) = (picker, picker_size) {
+            self.picker_scene.reset_and_resize(size[0], size[1]);
+            self.picker_scene
+                .set_transform(Affine::scale(f64::from(PICKER_RENDER_SCALE)));
+            replay_geometry(&mut self.picker_scene, &picker.geometry, target_is_srgb);
+        }
 
         let swapchain_view = output
             .texture
@@ -749,52 +574,41 @@ impl WgpuState {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        let render_target = self.render_target.as_ref().unwrap();
-        self.render_geometry(
+        let render_size = vello_hybrid::RenderSize {
+            width: u32::from(main_size[0]),
+            height: u32::from(main_size[1]),
+        };
+        if let Err(error) = self.main_renderer.render(
+            &self.main_scene,
+            &mut self.main_resources,
+            &self.device,
+            &self.queue,
             &mut encoder,
-            "annotations",
-            &render_target.view,
-            &self.screen_bind_group,
-            true,
-            0..preview_index_count,
-        );
-        self.downsample(
-            &mut encoder,
+            &render_size,
             &swapchain_view,
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            render_target,
-            None,
-            false,
-        );
-        if let Some(text) = &self.text {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("annotation text"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &swapchain_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            text.render(&mut pass);
+            &self.texture_bindings,
+        ) {
+            eprintln!("vellum: Vello annotation render failed: {error}");
+            return false;
         }
-        if let Some(picker) = picker {
-            let picker_target = self.picker_render_target.as_ref().unwrap();
-            self.render_geometry(
+        if let (Some(picker), Some(size)) = (picker, picker_size) {
+            let render_size = vello_hybrid::RenderSize {
+                width: u32::from(size[0]),
+                height: u32::from(size[1]),
+            };
+            if let Err(error) = self.picker_renderer.render(
+                &self.picker_scene,
+                &mut self.picker_resources,
+                &self.device,
+                &self.queue,
                 &mut encoder,
-                "picker",
-                &picker_target.target.view,
-                &picker_target.screen_bind_group,
-                false,
-                preview_index_count..preview_index_count + picker_index_count,
-            );
+                &render_size,
+                &self.picker_target.as_ref().unwrap().view,
+                &self.texture_bindings,
+            ) {
+                eprintln!("vellum: Vello picker render failed: {error}");
+                return false;
+            }
             let left = picker.origin[0].max(0.0);
             let top = picker.origin[1].max(0.0);
             let right =
@@ -802,93 +616,117 @@ impl WgpuState {
             let bottom =
                 (picker.origin[1] + picker.size[1] as f32).min(self.surface_config.height as f32);
             if right > left && bottom > top {
-                self.downsample(
+                self.composite_picker(
                     &mut encoder,
                     &swapchain_view,
                     wgpu::LoadOp::Load,
-                    &picker_target.target,
+                    self.picker_target.as_ref().unwrap(),
                     Some([left, top, right - left, bottom - top]),
-                    true,
                 );
             }
         }
         self.queue.submit(Some(encoder.finish()));
         output.present();
-        if let Some(text) = &mut self.text {
-            text.trim();
-        }
         true
     }
 
-    pub fn release_render_target(&mut self) {
-        self.render_target = None;
-        self.picker_render_target = None;
-    }
-
-    fn upload_geometry<'a>(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        vertices: &mut GrowingBuffer,
-        indices: &mut GrowingBuffer,
-        geometries: impl IntoIterator<Item = &'a Geometry>,
-        packed_vertices: &mut Vec<Vertex>,
-        packed_indices: &mut Vec<u32>,
-    ) -> u32 {
-        packed_vertices.clear();
-        packed_indices.clear();
-        for geometry in geometries
-            .into_iter()
-            .filter(|geometry| !geometry.is_empty())
-        {
-            let buffers = &geometry.vertex_buffers;
-            let base_vertex = packed_vertices.len() as u32;
-            packed_vertices.extend_from_slice(&buffers.vertices);
-            packed_indices.extend(buffers.indices.iter().map(|index| index + base_vertex));
-        }
-        vertices.ensure_capacity(
-            device,
-            (packed_vertices.len() * std::mem::size_of::<Vertex>()).max(1) as u64,
-        );
-        indices.ensure_capacity(
-            device,
-            (packed_indices.len() * std::mem::size_of::<u32>()).max(1) as u64,
-        );
-        if !packed_vertices.is_empty() {
-            queue.write_buffer(&vertices.buffer, 0, bytemuck::cast_slice(packed_vertices));
-            queue.write_buffer(&indices.buffer, 0, bytemuck::cast_slice(packed_indices));
-        }
-        packed_indices.len() as u32
+    pub fn release_picker_target(&mut self) {
+        self.picker_target = None;
     }
 }
 
-fn draw_buffer<'pass>(
-    pass: &mut wgpu::RenderPass<'pass>,
-    vertices: &'pass wgpu::Buffer,
-    indices: &'pass wgpu::Buffer,
-    indices_range: std::ops::Range<u32>,
-) {
-    if indices_range.is_empty() {
+fn checked_scene_size(size: [u32; 2], label: &str) -> Option<[u16; 2]> {
+    let width = size[0].try_into().ok();
+    let height = size[1].try_into().ok();
+    match (width, height) {
+        (Some(width), Some(height)) => Some([width, height]),
+        _ => {
+            eprintln!(
+                "vellum: {label} target {}x{} exceeds Vello Hybrid's u16 scene dimensions",
+                size[0], size[1]
+            );
+            None
+        }
+    }
+}
+
+fn checked_picker_scene_size(size: [u32; 2]) -> Option<[u16; 2]> {
+    let width = size[0]
+        .checked_mul(PICKER_RENDER_SCALE)
+        .and_then(|value| value.try_into().ok());
+    let height = size[1]
+        .checked_mul(PICKER_RENDER_SCALE)
+        .and_then(|value| value.try_into().ok());
+    match (width, height) {
+        (Some(width), Some(height)) => Some([width, height]),
+        _ => {
+            eprintln!(
+                "vellum: picker target {}x{} at {}x exceeds Vello Hybrid's u16 scene dimensions",
+                size[0], size[1], PICKER_RENDER_SCALE
+            );
+            None
+        }
+    }
+}
+
+fn replay_geometry(scene: &mut vello_hybrid::Scene, geometry: &Geometry, target_is_srgb: bool) {
+    if geometry.is_empty() {
         return;
     }
-    pass.set_vertex_buffer(0, vertices.slice(..));
-    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-    pass.draw_indexed(indices_range, 0, 0..1);
+    for command in &geometry.commands {
+        match command {
+            DrawCommand::Fill {
+                path,
+                fill_rule,
+                color,
+            } => {
+                scene.set_paint(vello_color(*color, target_is_srgb));
+                scene.set_fill_rule(match fill_rule {
+                    FillRule::NonZero => peniko::Fill::NonZero,
+                    FillRule::EvenOdd => peniko::Fill::EvenOdd,
+                });
+                scene.fill_path(path);
+            }
+            DrawCommand::Stroke {
+                path,
+                stroke,
+                color,
+            } => {
+                scene.set_paint(vello_color(*color, target_is_srgb));
+                scene.set_stroke(stroke.as_kurbo());
+                scene.stroke_path(path);
+            }
+        }
+    }
 }
 
-fn create_downsample_pipeline(
+fn vello_color([red, green, blue, alpha]: [f32; 4], target_is_srgb: bool) -> peniko::Color {
+    fn srgb_to_linear(component: f32) -> f32 {
+        if component <= 0.04045 {
+            component / 12.92
+        } else {
+            ((component + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    let convert = |component| {
+        if target_is_srgb {
+            srgb_to_linear(component)
+        } else {
+            component
+        }
+    };
+    peniko::Color::new([convert(red), convert(green), convert(blue), alpha])
+}
+
+fn create_picker_composite_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
-    exact: bool,
-    render_scale: u32,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(if exact {
-            "picker downsample pipeline"
-        } else {
-            "downsample pipeline"
-        }),
+        label: Some("picker composite pipeline"),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -900,10 +738,7 @@ fn create_downsample_pipeline(
             module: shader,
             entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &[
-                    ("exact", exact as u8 as f64),
-                    ("render_scale", render_scale as f64),
-                ],
+                constants: &[("render_scale", PICKER_RENDER_SCALE as f64)],
                 ..Default::default()
             },
             targets: &[Some(wgpu::ColorTargetState {
