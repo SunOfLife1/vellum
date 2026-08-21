@@ -43,7 +43,7 @@ in
 
     postInstall = ''
       wrapProgram $out/bin/vellum \
-        --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [libGL vulkan-loader]}
+        --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [wayland libGL vulkan-loader]}
 
       man_dir=$(find target -type d -path '*/build/vellum-*/out/man' -print -quit)
       mkdir -p "$out/share/man/man1"
