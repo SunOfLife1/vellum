@@ -21,13 +21,14 @@ impl Tool {
 
     pub(super) fn properties(self) -> Option<(usize, Option<f32>)> {
         Some(match self {
-            Self::Pen => (0, Some(Self::PEN_ROUNDNESS)),
+            Self::Pen => (0, None),
             Self::Line => (1, Some(Self::LINE_ROUNDNESS)),
             Self::Arrow => (2, Some(Self::ARROW_ROUNDNESS)),
             Self::Triangle => (3, Some(Self::TRIANGLE_ROUNDNESS)),
             Self::Rectangle => (4, Some(Self::RECTANGLE_ROUNDNESS)),
             Self::Ellipse => (5, None),
-            Self::Text => (6, None),
+            Self::Eraser => (6, None),
+            Self::Text => (7, None),
             _ => return None,
         })
     }

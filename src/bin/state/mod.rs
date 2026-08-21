@@ -1,3 +1,4 @@
+mod cursor;
 mod draw;
 mod input;
 
@@ -12,6 +13,7 @@ use wayland_client::Proxy;
 use wayland_client::QueueHandle;
 use wayland_client::WEnum;
 
+use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_callback::WlCallback;
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
@@ -20,6 +22,8 @@ use wayland_client::protocol::wl_pointer::WlPointer;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::protocol::wl_shm::WlShm;
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::WlSurface;
 
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::WpCursorShapeDeviceV1;
@@ -61,6 +65,7 @@ struct SetupWaylandState {
 
     compositor: Option<WlCompositor>,
     seat: Option<WlSeat>,
+    shm: Option<WlShm>,
 
     layer_shell: Option<ZwlrLayerShellV1>,
     cursor_shape_manager: Option<WpCursorShapeManagerV1>,
@@ -110,6 +115,7 @@ impl SetupWaylandState {
             compositor,
             surface,
             seat,
+            shm: self.shm.ok_or("compositor does not provide wl_shm")?,
             layer_surface,
             pointer: None,
             keyboard: None,
@@ -148,6 +154,10 @@ impl Dispatch<WlRegistry, QueueHandle<State>> for SetupWaylandState {
                     let seat =
                         registry.bind::<WlSeat, _, _>(name, version.min(9), state_qhandle, ());
                     setup_state.seat = Some(seat);
+                }
+                "wl_shm" => {
+                    setup_state.shm =
+                        Some(registry.bind::<WlShm, _, _>(name, version.min(1), state_qhandle, ()));
                 }
                 "zwlr_layer_shell_v1" => {
                     let layer_shell = registry.bind::<ZwlrLayerShellV1, _, _>(
@@ -331,6 +341,7 @@ impl State {
             }
             self.deactivate();
         }
+        self.refresh_pointer_cursor();
     }
 
     pub fn clear(&mut self) {
@@ -440,6 +451,18 @@ impl State {
         }
     }
 
+    fn refresh_pointer_cursor(&mut self) {
+        let (Some((x, y)), Some(pointer)) = (self.pointer.position(), &self.wayland.pointer) else {
+            return;
+        };
+        let cursor = self.draw.cursor(
+            Point::new(x as f32, y as f32),
+            self.pointer.temporary_eraser(),
+        );
+        self.pointer
+            .refresh_cursor(pointer, &self.wayland.shm, &self.qhandle, cursor);
+    }
+
     fn request_render(&mut self) {
         if self.frame_pending {
             return;
@@ -500,6 +523,7 @@ struct WaylandState {
     compositor: WlCompositor,
     surface: WlSurface,
     seat: WlSeat,
+    shm: WlShm,
 
     layer_surface: ZwlrLayerSurfaceV1,
     pointer: Option<WlPointer>,
@@ -510,7 +534,10 @@ struct WaylandState {
 }
 
 delegate_noop!(WlCompositor);
+delegate_noop!(WlBuffer);
 delegate_noop!(WlRegion);
+delegate_noop!(WlShm);
+delegate_noop!(WlShmPool);
 delegate_noop!(WlSurface);
 
 impl Dispatch<WlSeat, ()> for State {
@@ -532,11 +559,15 @@ impl Dispatch<WlSeat, ()> for State {
         };
         if capabilities.contains(Capability::Pointer) && state.wayland.pointer.is_none() {
             let pointer = seat.get_pointer(qhandle, ());
-            if let Some(manager) = &state.wayland.cursor_shape_manager {
-                state
-                    .pointer
-                    .set_cursor_shape_device(manager.get_pointer(&pointer, qhandle, ()));
-            }
+            let shape_device = state
+                .wayland
+                .cursor_shape_manager
+                .as_ref()
+                .map(|manager| manager.get_pointer(&pointer, qhandle, ()));
+            let cursor_surface = cursor::CursorSurface::new(&state.wayland.compositor, qhandle);
+            state
+                .pointer
+                .set_cursor_devices(shape_device, cursor_surface);
             state.wayland.pointer = Some(pointer);
         } else if !capabilities.contains(Capability::Pointer)
             && let Some(pointer) = state.wayland.pointer.take()

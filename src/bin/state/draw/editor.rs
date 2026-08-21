@@ -1,4 +1,3 @@
-use super::Modifiers;
 use super::freehand;
 use super::history::{Entry as HistoryEntry, History};
 use super::picker::{Choice, Picker, choice, picker_geometry};
@@ -8,15 +7,16 @@ use super::selection::{self, Handle};
 pub(crate) use super::text_edit::CursorMove;
 use super::text_edit::TextEdit;
 use super::tool::Tool;
+use super::{Cursor, MIN_ERASER_WIDTH, Modifiers, ToolCursor};
 use crate::render::Geometry;
 
-const MIN_STROKE_WIDTH: f32 = 0.5;
+const MIN_STROKE_WIDTH: f32 = 1.0;
 const MAX_STROKE_WIDTH: f32 = 64.0;
 const MIN_OPACITY: f32 = 0.05;
 const MIN_FONT_SIZE: f32 = 8.0;
 const MAX_FONT_SIZE: f32 = 192.0;
 const DEFAULT_TEXT_SIZE: f32 = 20.0;
-const PROPERTY_COUNT: usize = 7;
+const PROPERTY_COUNT: usize = 8;
 const TEXT_SLOT: usize = PROPERTY_COUNT - 1;
 
 fn stroke_size_label(value: f32, default: f32) -> String {
@@ -162,12 +162,17 @@ impl Editor {
             Tool::RECTANGLE_ROUNDNESS,
             0.0,
             0.0,
+            0.0,
         ]
         .map(|roundness| ToolProperties {
             size: width,
             opacity,
             roundness,
         });
+        let (eraser_slot, _) = Tool::Eraser
+            .properties()
+            .expect("eraser must have adjustable properties");
+        tool_properties[eraser_slot].size = width.max(MIN_ERASER_WIDTH);
         tool_properties[TEXT_SLOT].size = text_size;
         let active = default_tool
             .properties()
@@ -175,7 +180,11 @@ impl Editor {
         Self {
             tool: default_tool,
             style: Style {
-                width,
+                width: if default_tool == Tool::Eraser {
+                    width.max(MIN_ERASER_WIDTH)
+                } else {
+                    width
+                },
                 color: [rgb[0], rgb[1], rgb[2], opacity],
                 roundness: active.map_or(0.5, |properties| properties.roundness),
             },
@@ -869,13 +878,19 @@ impl Editor {
             let Some((slot, _)) = self.tool.properties() else {
                 return (Damage::None, String::new());
             };
+            let minimum = if self.tool == Tool::Eraser {
+                MIN_ERASER_WIDTH
+            } else {
+                MIN_STROKE_WIDTH
+            };
+            let default = self.default_width.max(minimum);
             let properties = &mut self.tool_properties[slot];
             properties.size = stepped_size(
                 properties.size,
-                self.default_width,
+                default,
                 steps,
                 0.5,
-                MIN_STROKE_WIDTH,
+                minimum,
                 MAX_STROKE_WIDTH,
             );
             let width = properties.size;
@@ -883,7 +898,7 @@ impl Editor {
             let damage = self.update_live_stroke_style();
             (
                 damage.max(Damage::Preview),
-                stroke_size_label(width, self.default_width),
+                stroke_size_label(width, default),
             )
         }
     }
@@ -901,6 +916,9 @@ impl Editor {
             return (Damage::Preview, percent_label(opacity, 1.0));
         }
         if self.selected.is_empty() {
+            if self.tool == Tool::Eraser {
+                return (Damage::None, String::new());
+            }
             let Some((slot, _)) = self.tool.properties() else {
                 return (Damage::None, String::new());
             };
@@ -995,17 +1013,45 @@ impl Editor {
         selection::hit_handle(&element.kind, element.style, element.bounds, point)
     }
 
-    pub fn cursor_hint(&self, point: Point) -> selection::CursorHint {
+    pub fn cursor(&self, point: Point, temporary_eraser: bool) -> Cursor {
+        if temporary_eraser {
+            return self.tool_cursor(Tool::Eraser);
+        }
         match &self.interaction {
-            Some(Interaction::Moving { .. }) => return selection::CursorHint::Move,
-            Some(Interaction::Resizing { handle, .. }) => return selection::cursor(*handle),
+            Some(
+                Interaction::Freehand(_)
+                | Interaction::Drawing { .. }
+                | Interaction::Moving { .. }
+                | Interaction::Resizing { .. },
+            ) => {
+                return Cursor::Hidden;
+            }
+            Some(Interaction::EditingText(_)) => {
+                return Cursor::Shape(selection::CursorHint::Text);
+            }
+            Some(Interaction::Erasing) => return self.tool_cursor(Tool::Eraser),
             _ => {}
         }
-        if self.tool != Tool::Select || self.selected.len() != 1 {
-            return selection::CursorHint::Crosshair;
+        if self.picker.is_some() {
+            return Cursor::Shape(selection::CursorHint::Crosshair);
+        }
+        if self.tool == Tool::Text {
+            return Cursor::Shape(selection::CursorHint::Text);
+        }
+        if matches!(
+            self.tool,
+            Tool::Line | Tool::Arrow | Tool::Triangle | Tool::Rectangle | Tool::Ellipse
+        ) {
+            return Cursor::Shape(selection::CursorHint::Crosshair);
+        }
+        if self.tool != Tool::Select {
+            return self.tool_cursor(self.tool);
+        }
+        if self.selected.len() != 1 {
+            return Cursor::Shape(selection::CursorHint::Crosshair);
         }
         let id = self.selected[0];
-        match self.hit_handle(id, point) {
+        Cursor::Shape(match self.hit_handle(id, point) {
             Some(handle) => selection::cursor(handle),
             None if self
                 .element(id)
@@ -1014,7 +1060,15 @@ impl Editor {
                 selection::CursorHint::Move
             }
             None => selection::CursorHint::Crosshair,
-        }
+        })
+    }
+
+    fn tool_cursor(&self, tool: Tool) -> Cursor {
+        Cursor::Tool(ToolCursor {
+            tool,
+            width: self.style.width,
+            color: self.style.color,
+        })
     }
 
     pub fn hit_test(&self, point: Point) -> Option<ElementId> {
@@ -1126,7 +1180,14 @@ impl Editor {
     }
 
     fn erase_at(&mut self, point: Point) -> bool {
-        self.hit_test(point).is_some_and(|id| self.remove_id(id))
+        let radius = super::eraser_radius(self.style.width);
+        let hit = self
+            .elements
+            .iter()
+            .rev()
+            .find(|element| element.erase_hit_test(point, radius))
+            .map(|element| element.id);
+        hit.is_some_and(|id| self.remove_id(id))
     }
 
     fn apply_rgb(&mut self, rgb: [f32; 3]) -> Damage {

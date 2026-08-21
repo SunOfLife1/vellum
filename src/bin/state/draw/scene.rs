@@ -228,10 +228,18 @@ impl Element {
     }
 
     pub(super) fn hit_test(&self, point: Point) -> bool {
-        if !self.bounds.expanded(HIT_SLOP).contains(point) {
+        self.hit_test_with_slop(point, HIT_SLOP, false)
+    }
+
+    pub(super) fn erase_hit_test(&self, point: Point, radius: f32) -> bool {
+        self.hit_test_with_slop(point, radius, true)
+    }
+
+    fn hit_test_with_slop(&self, point: Point, slop: f32, expand_text: bool) -> bool {
+        if !self.bounds.expanded(slop).contains(point) {
             return false;
         }
-        let tolerance = self.style.width * 0.5 + HIT_SLOP;
+        let tolerance = self.style.width * 0.5 + slop;
         match &self.kind {
             ElementKind::Path {
                 points,
@@ -250,18 +258,13 @@ impl Element {
                     }) || (head.shaft_length > f32::EPSILON
                         && segment_distance_squared(point, start, head.base) <= tolerance_squared);
                     shaft_hit
-                        || rounded_triangle_hit(
-                            &head.vertices,
-                            self.style.roundness,
-                            point,
-                            HIT_SLOP,
-                        )
+                        || rounded_triangle_hit(&head.vertices, self.style.roundness, point, slop)
                 } else {
                     polyline_hit(
                         points,
                         point,
                         if *smooth {
-                            self.style.width * 0.8 + HIT_SLOP
+                            self.style.width * 0.8 + slop
                         } else {
                             tolerance
                         },
@@ -269,7 +272,7 @@ impl Element {
                 }
             }
             ElementKind::Triangle { vertices } => {
-                super::triangle::hit_test(vertices, self.style, point, HIT_SLOP)
+                super::triangle::hit_test(vertices, self.style, point, slop)
             }
             ElementKind::Rectangle { min, max } => {
                 rounded_rectangle_hit(*min, *max, self.style.roundness, point, tolerance)
@@ -283,7 +286,13 @@ impl Element {
                 let normalized_tolerance = tolerance / radii.x.min(radii.y).max(1.0);
                 (normalized - 1.0).abs() <= normalized_tolerance
             }
-            ElementKind::Text { .. } => self.bounds.contains(point),
+            ElementKind::Text { .. } => {
+                if expand_text {
+                    self.bounds.expanded(slop).contains(point)
+                } else {
+                    self.bounds.contains(point)
+                }
+            }
         }
     }
 }
@@ -538,7 +547,7 @@ pub(super) fn default_roundness(kind: &ElementKind) -> Option<f32> {
     use super::tool::Tool;
 
     match kind {
-        ElementKind::Path { smooth: true, .. } => Some(Tool::PEN_ROUNDNESS),
+        ElementKind::Path { smooth: true, .. } => None,
         ElementKind::Path {
             end_marker: Some(EndMarker::Arrow),
             ..

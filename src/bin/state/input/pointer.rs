@@ -5,12 +5,14 @@ use wayland_client::QueueHandle;
 use wayland_client::WEnum;
 
 use wayland_client::protocol::wl_pointer::WlPointer;
+use wayland_client::protocol::wl_shm::WlShm;
 
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::WpCursorShapeDeviceV1;
 
 use super::super::State;
-use super::super::draw::{Action, CursorHint, Point};
+use super::super::cursor::CursorSurface;
+use super::super::draw::{Action, Cursor, CursorHint};
 use super::short_click;
 
 const EVDEV_LEFT: u32 = 272;
@@ -32,7 +34,9 @@ pub(in crate::state) struct PointerState {
     event_sequence: EventSequence,
 
     cursor_shape_device: Option<WpCursorShapeDeviceV1>,
+    cursor_surface: Option<CursorSurface>,
     cursor_serial: Option<u32>,
+    current_cursor: Option<Cursor>,
 
     position: Option<(f64, f64)>,
     left_button_held: bool,
@@ -48,11 +52,64 @@ pub(in crate::state) struct PointerState {
 }
 
 impl PointerState {
-    pub(in crate::state) fn set_cursor_shape_device(
+    pub(in crate::state) fn set_cursor_devices(
         &mut self,
-        cursor_shape_device: WpCursorShapeDeviceV1,
+        cursor_shape_device: Option<WpCursorShapeDeviceV1>,
+        cursor_surface: CursorSurface,
     ) {
-        self.cursor_shape_device = Some(cursor_shape_device)
+        self.cursor_shape_device = cursor_shape_device;
+        self.cursor_surface = Some(cursor_surface);
+    }
+
+    pub(in crate::state) fn position(&self) -> Option<(f64, f64)> {
+        self.position
+    }
+
+    pub(in crate::state) fn temporary_eraser(&self) -> bool {
+        self.middle_button_held
+    }
+
+    pub(in crate::state) fn refresh_cursor(
+        &mut self,
+        pointer: &WlPointer,
+        shm: &WlShm,
+        qhandle: &QueueHandle<State>,
+        cursor: Cursor,
+    ) {
+        let Some(serial) = self.cursor_serial else {
+            return;
+        };
+        if self.current_cursor == Some(cursor) {
+            return;
+        }
+        match cursor {
+            Cursor::Hidden => pointer.set_cursor(serial, None, 0, 0),
+            Cursor::Shape(hint) => {
+                if let Some(device) = &self.cursor_shape_device {
+                    device.set_shape(serial, cursor_shape(hint));
+                }
+            }
+            Cursor::Tool(preview) => {
+                // Without the cursor-shape protocol there is no reliable way to
+                // restore system interaction cursors after installing a custom one.
+                if self.cursor_shape_device.is_none() {
+                    return;
+                }
+                let Some(surface) = &mut self.cursor_surface else {
+                    return;
+                };
+                if let Err(error) = surface.update(preview, shm, qhandle) {
+                    eprintln!("vellum: could not update cursor preview: {error}");
+                    if let Some(device) = &self.cursor_shape_device {
+                        device.set_shape(serial, Shape::Crosshair);
+                    }
+                    return;
+                }
+                let [hotspot_x, hotspot_y] = surface.hotspot();
+                pointer.set_cursor(serial, Some(surface.surface()), hotspot_x, hotspot_y);
+            }
+        }
+        self.current_cursor = Some(cursor);
     }
 
     pub(in crate::state) fn clear_pointer(&mut self) {
@@ -81,6 +138,7 @@ impl PointerState {
 
         if let Some(serial) = sequence.enter_serial {
             self.cursor_serial = Some(serial);
+            self.current_cursor = None;
         }
 
         if sequence.leave_serial.is_some() {
@@ -132,17 +190,6 @@ impl Dispatch<WlPointer, (), State> for PointerState {
             }
             if sequence.pressed(REDO) {
                 state.apply_action(Action::Redo);
-            }
-
-            if (sequence.enter_serial.is_some() || sequence.motion.is_some())
-                && let Some((x, y)) = state.pointer.position
-                && let Some(ref device) = state.pointer.cursor_shape_device
-                && let Some(serial) = state.pointer.cursor_serial
-            {
-                device.set_shape(
-                    serial,
-                    cursor_shape(state.draw.cursor_hint(Point::new(x as f32, y as f32))),
-                );
             }
 
             let modifiers = state.modifiers();
@@ -245,11 +292,12 @@ impl Dispatch<WlPointer, (), State> for PointerState {
                     }
                 }
             }
+            state.refresh_pointer_cursor();
         }
     }
 }
 
-fn cursor_shape(hint: CursorHint) -> Shape {
+pub(super) fn cursor_shape(hint: CursorHint) -> Shape {
     match hint {
         CursorHint::Crosshair => Shape::Crosshair,
         CursorHint::Move => Shape::Move,
@@ -257,6 +305,7 @@ fn cursor_shape(hint: CursorHint) -> Shape {
         CursorHint::EwResize => Shape::EwResize,
         CursorHint::NwseResize => Shape::NwseResize,
         CursorHint::NeswResize => Shape::NeswResize,
+        CursorHint::Text => Shape::Text,
     }
 }
 

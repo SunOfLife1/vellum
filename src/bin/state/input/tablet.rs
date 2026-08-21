@@ -6,6 +6,7 @@ use wayland_client::Proxy;
 use wayland_client::QueueHandle;
 use wayland_client::WEnum;
 use wayland_client::backend::ObjectId;
+use wayland_client::protocol::wl_shm::WlShm;
 
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::WpCursorShapeDeviceV1;
@@ -20,6 +21,9 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::EVT_TABLET_A
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::EVT_TOOL_ADDED_OPCODE;
 
 use super::super::State;
+use super::super::cursor::CursorSurface;
+use super::super::draw::{Cursor, Point};
+use super::pointer::cursor_shape;
 use super::short_click;
 
 const EVDEV_STYLUS: u32 = 331;
@@ -33,6 +37,9 @@ pub(in crate::state) struct TabletState {
 
     _tablet_seat: Option<ZwpTabletSeatV2>,
     tablet_cursor_shape_devices: HashMap<ObjectId, WpCursorShapeDeviceV1>,
+    tablet_cursor_surfaces: HashMap<ObjectId, CursorSurface>,
+    cursor_serials: HashMap<ObjectId, u32>,
+    current_cursors: HashMap<ObjectId, Cursor>,
     eraser_tools: HashSet<ObjectId>,
 
     pos: Option<(f64, f64)>,
@@ -54,6 +61,48 @@ impl TabletState {
         update_held(&mut self.pen_held, sequence, PEN);
         update_held(&mut self.button_held, sequence, BUTTON);
     }
+
+    fn refresh_cursor(
+        &mut self,
+        tablet_tool: &ZwpTabletToolV2,
+        cursor: Cursor,
+        shm: &WlShm,
+        qhandle: &QueueHandle<State>,
+    ) {
+        let id = tablet_tool.id();
+        let Some(&serial) = self.cursor_serials.get(&id) else {
+            return;
+        };
+        if self.current_cursors.get(&id) == Some(&cursor) {
+            return;
+        }
+        match cursor {
+            Cursor::Hidden => tablet_tool.set_cursor(serial, None, 0, 0),
+            Cursor::Shape(hint) => {
+                if let Some(device) = self.tablet_cursor_shape_devices.get(&id) {
+                    device.set_shape(serial, cursor_shape(hint));
+                }
+            }
+            Cursor::Tool(preview) => {
+                if !self.tablet_cursor_shape_devices.contains_key(&id) {
+                    return;
+                }
+                let Some(surface) = self.tablet_cursor_surfaces.get_mut(&id) else {
+                    return;
+                };
+                if let Err(error) = surface.update(preview, shm, qhandle) {
+                    eprintln!("vellum: could not update tablet cursor preview: {error}");
+                    if let Some(device) = self.tablet_cursor_shape_devices.get(&id) {
+                        device.set_shape(serial, Shape::Crosshair);
+                    }
+                    return;
+                }
+                let [hotspot_x, hotspot_y] = surface.hotspot();
+                tablet_tool.set_cursor(serial, Some(surface.surface()), hotspot_x, hotspot_y);
+            }
+        }
+        self.current_cursors.insert(id, cursor);
+    }
 }
 
 impl Dispatch<ZwpTabletSeatV2, (), State> for TabletState {
@@ -66,14 +115,19 @@ impl Dispatch<ZwpTabletSeatV2, (), State> for TabletState {
         qhandle: &QueueHandle<State>,
     ) {
         use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_seat_v2::Event;
-        if let Event::ToolAdded { id } = event
-            && let Some(manager) = &state.wayland.cursor_shape_manager
-        {
-            let device = manager.get_tablet_tool_v2(&id, qhandle, ());
-            state
-                .tablet
-                .tablet_cursor_shape_devices
-                .insert(id.id(), device);
+        if let Event::ToolAdded { id } = event {
+            let object_id = id.id();
+            if let Some(manager) = &state.wayland.cursor_shape_manager {
+                let device = manager.get_tablet_tool_v2(&id, qhandle, ());
+                state
+                    .tablet
+                    .tablet_cursor_shape_devices
+                    .insert(object_id.clone(), device);
+            }
+            state.tablet.tablet_cursor_surfaces.insert(
+                object_id,
+                CursorSurface::new(&state.wayland.compositor, qhandle),
+            );
         }
     }
 
@@ -100,6 +154,12 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
                     .tablet
                     .tablet_cursor_shape_devices
                     .remove(&tablet_tool.id());
+                state
+                    .tablet
+                    .tablet_cursor_surfaces
+                    .remove(&tablet_tool.id());
+                state.tablet.cursor_serials.remove(&tablet_tool.id());
+                state.tablet.current_cursors.remove(&tablet_tool.id());
                 state.tablet.eraser_tools.remove(&tablet_tool.id());
                 return;
             }
@@ -115,6 +175,14 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
         }
         if let Some(sequence) = state.tablet.event_sequence.dispatch(event) {
             state.tablet.update_state(sequence);
+            if let Some(serial) = sequence.enter_serial {
+                state.tablet.cursor_serials.insert(tablet_tool.id(), serial);
+                state.tablet.current_cursors.remove(&tablet_tool.id());
+            }
+            if sequence.proximity_out {
+                state.tablet.cursor_serials.remove(&tablet_tool.id());
+                state.tablet.current_cursors.remove(&tablet_tool.id());
+            }
             let pen_pressed = sequence.pressed(PEN);
             let pen_released = sequence.released(PEN);
             let button_pressed = sequence.pressed(BUTTON);
@@ -125,15 +193,6 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
             }
             let short_button_click = button_released
                 && short_click(state.tablet.button_press_time.take(), Some(sequence.time));
-
-            if let Some(device) = state
-                .tablet
-                .tablet_cursor_shape_devices
-                .get(&tablet_tool.id())
-                && let Some(serial) = sequence.enter_serial
-            {
-                device.set_shape(serial, Shape::Crosshair);
-            }
 
             let modifiers = state.modifiers();
             if button_pressed && let Some(pos) = state.tablet.pos {
@@ -178,6 +237,20 @@ impl Dispatch<ZwpTabletToolV2, (), State> for TabletState {
             if pen_released && let Some(pos) = state.tablet.pos {
                 state.pointer_up(pos, modifiers, false);
             }
+            if !sequence.proximity_out {
+                let (x, y) = state.tablet.pos.unwrap_or_default();
+                let temporary_eraser =
+                    eraser || (state.tablet.button_held && state.tablet.pen_held);
+                let cursor = state
+                    .draw
+                    .cursor(Point::new(x as f32, y as f32), temporary_eraser);
+                state.tablet.refresh_cursor(
+                    tablet_tool,
+                    cursor,
+                    &state.wayland.shm,
+                    &state.qhandle,
+                );
+            }
         }
     }
 }
@@ -190,6 +263,7 @@ struct EventSequence {
     released: u8,
 
     enter_serial: Option<u32>,
+    proximity_out: bool,
     time: u32,
 }
 
@@ -211,6 +285,10 @@ impl EventSequence {
                 surface: _,
             } => {
                 self.enter_serial = Some(serial);
+                None
+            }
+            Event::ProximityOut => {
+                self.proximity_out = true;
                 None
             }
             Event::Down { serial: _ } => {

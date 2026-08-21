@@ -18,6 +18,26 @@ pub(super) use self::scene::Point;
 pub(crate) use self::selection::CursorHint;
 pub(crate) use self::tool::Tool;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ToolCursor {
+    pub tool: Tool,
+    pub width: f32,
+    pub color: [f32; 4],
+}
+
+pub(crate) const MIN_ERASER_WIDTH: f32 = 4.0;
+
+pub(crate) fn eraser_radius(width: f32) -> f32 {
+    width.max(MIN_ERASER_WIDTH) * 0.5
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Cursor {
+    Hidden,
+    Shape(CursorHint),
+    Tool(ToolCursor),
+}
+
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -136,8 +156,8 @@ impl DrawState {
         self.editor.picker_active()
     }
 
-    pub fn cursor_hint(&self, point: Point) -> CursorHint {
-        self.editor.cursor_hint(point)
+    pub fn cursor(&self, point: Point, temporary_eraser: bool) -> Cursor {
+        self.editor.cursor(point, temporary_eraser)
     }
 
     pub fn open_picker(&mut self, center: Point) -> bool {

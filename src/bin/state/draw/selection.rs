@@ -29,6 +29,7 @@ pub(crate) enum CursorHint {
     EwResize,
     NwseResize,
     NeswResize,
+    Text,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
