@@ -32,6 +32,23 @@ pub(super) struct Picker {
     pub hovered: Option<Choice>,
 }
 
+pub(super) struct ShapeFills {
+    pub triangle: bool,
+    pub rectangle: bool,
+    pub ellipse: bool,
+}
+
+impl ShapeFills {
+    fn for_tool(&self, tool: Tool) -> bool {
+        match tool {
+            Tool::Triangle => self.triangle,
+            Tool::Rectangle => self.rectangle,
+            Tool::Ellipse => self.ellipse,
+            _ => false,
+        }
+    }
+}
+
 const TOOL_CHOICES: [Tool; 8] = [
     Tool::Pen,
     Tool::Line,
@@ -190,7 +207,7 @@ pub(super) fn picker_geometry(
     hovered: Option<Choice>,
     active: Tool,
     current_color: [f32; 4],
-    tool_fills: [bool; 3],
+    tool_fills: ShapeFills,
     palette: &[[f32; 3]],
 ) -> LocalGeometry {
     let mut output = Geometry::empty();
@@ -239,12 +256,7 @@ pub(super) fn picker_geometry(
             local_center.x + TOOL_ICON_RADIUS * cos,
             local_center.y + TOOL_ICON_RADIUS * sin,
         );
-        let filled = match tool {
-            Tool::Triangle => tool_fills[0],
-            Tool::Rectangle => tool_fills[1],
-            Tool::Ellipse => tool_fills[2],
-            _ => false,
-        };
+        let filled = tool_fills.for_tool(tool);
         push_tool_icon(&mut output, tool_icon_center, tool, filled);
     }
     LocalGeometry::new(output, origin, [PICKER_LAYER_SIZE; 2])

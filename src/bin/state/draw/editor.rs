@@ -1,24 +1,20 @@
 use super::freehand;
 use super::history::{Entry as HistoryEntry, History};
-use super::picker::{Choice, Picker, choice, picker_geometry};
+use super::picker::{Choice, Picker, ShapeFills, choice, picker_geometry};
 use super::scene::{Element, HIT_SLOP, default_roundness, geometry};
 use super::scene::{ElementId, ElementKind, EndMarker, Point, Style};
 use super::selection::{self, Handle};
 pub(crate) use super::text_edit::CursorMove;
 use super::text_edit::TextEdit;
-use super::tool::Tool;
+use super::tool::{DEFAULT_ERASER_WIDTH, DEFAULT_TEXT_SIZE, Tool, ToolProperties, ToolPropertySet};
 use super::{Cursor, MIN_ERASER_WIDTH, Modifiers, ToolCursor};
 use crate::render::Geometry;
 
 const MIN_STROKE_WIDTH: f32 = 1.0;
 const MAX_STROKE_WIDTH: f32 = 64.0;
-const DEFAULT_ERASER_WIDTH: f32 = 10.0;
 const MIN_OPACITY: f32 = 0.05;
 const MIN_FONT_SIZE: f32 = 8.0;
 const MAX_FONT_SIZE: f32 = 192.0;
-const DEFAULT_TEXT_SIZE: f32 = 20.0;
-const PROPERTY_COUNT: usize = 8;
-const TEXT_SLOT: usize = PROPERTY_COUNT - 1;
 
 fn stroke_size_label(value: f32, default: f32) -> String {
     let suffix = if value == default { " · default" } else { "" };
@@ -125,14 +121,6 @@ pub struct EditorEffect {
     pub feedback: Option<String>,
 }
 
-#[derive(Clone, Copy)]
-struct ToolProperties {
-    size: f32,
-    opacity: f32,
-    roundness: f32,
-    filled: bool,
-}
-
 pub struct Editor {
     tool: Tool,
     style: Style,
@@ -146,7 +134,7 @@ pub struct Editor {
     default_text_size: f32,
     default_tool: Tool,
     last_non_eraser_tool: Tool,
-    tool_properties: [ToolProperties; PROPERTY_COUNT],
+    tool_properties: ToolPropertySet,
     remember_last_tool: bool,
     palette: Vec<[f32; 3]>,
 }
@@ -161,42 +149,9 @@ impl Editor {
         palette: Vec<crate::Rgb>,
     ) -> Self {
         let width = width.clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
-        let text_size = DEFAULT_TEXT_SIZE;
         let opacity = 1.0;
-        let roundness = [
-            Tool::PEN_ROUNDNESS,
-            Tool::LINE_ROUNDNESS,
-            Tool::ARROW_ROUNDNESS,
-            Tool::TRIANGLE_ROUNDNESS,
-            Tool::RECTANGLE_ROUNDNESS,
-            0.0,
-            0.0,
-            0.0,
-        ];
-        let filled = [
-            false,
-            false,
-            false,
-            default_fill_shapes,
-            default_fill_shapes,
-            default_fill_shapes,
-            false,
-            false,
-        ];
-        let mut tool_properties = std::array::from_fn(|index| ToolProperties {
-            size: width,
-            opacity,
-            roundness: roundness[index],
-            filled: filled[index],
-        });
-        let (eraser_slot, _) = Tool::Eraser
-            .properties()
-            .expect("eraser must have adjustable properties");
-        tool_properties[eraser_slot].size = DEFAULT_ERASER_WIDTH;
-        tool_properties[TEXT_SLOT].size = text_size;
-        let active = default_tool
-            .properties()
-            .map(|(slot, _)| tool_properties[slot]);
+        let tool_properties = ToolPropertySet::new(width, default_fill_shapes);
+        let active = tool_properties.properties(default_tool).copied();
         Self {
             tool: default_tool,
             style: Style {
@@ -216,7 +171,7 @@ impl Editor {
             next_id: 1,
             picker: None,
             default_width: width,
-            default_text_size: text_size,
+            default_text_size: DEFAULT_TEXT_SIZE,
             default_tool,
             last_non_eraser_tool: if default_tool == Tool::Eraser {
                 Tool::Pen
@@ -406,7 +361,10 @@ impl Editor {
                     origin: point,
                     content: String::new(),
                     cursor: 0,
-                    font_size: self.tool_properties[TEXT_SLOT].size,
+                    font_size: self
+                        .properties(Tool::Text)
+                        .expect("text must have adjustable properties")
+                        .size,
                     style: self.style,
                 }));
                 previous.max(Damage::Preview)
@@ -683,19 +641,18 @@ impl Editor {
         if !self.tool.supports_fill() {
             return (Damage::None, String::new());
         }
-        let (slot, _) = self
-            .tool
-            .properties()
+        let properties = self
+            .properties_mut(self.tool)
             .expect("fillable tools have adjustable properties");
-        let filled = !self.tool_properties[slot].filled;
-        self.tool_properties[slot].filled = filled;
-        self.style.filled = filled;
+        let filled = !properties.filled;
+        properties.filled = filled;
+        self.sync_active_style();
         (Damage::Preview, fill_label(filled))
     }
 
     fn tool_fill(&self, tool: Tool) -> bool {
-        tool.properties()
-            .is_some_and(|(slot, _)| self.tool_properties[slot].filled)
+        self.properties(tool)
+            .is_some_and(|properties| properties.filled)
     }
 
     fn picker_tool(&self) -> Tool {
@@ -829,11 +786,11 @@ impl Editor {
             picker.hovered,
             active,
             self.current_color(),
-            [
-                self.tool_fill(Tool::Triangle),
-                self.tool_fill(Tool::Rectangle),
-                self.tool_fill(Tool::Ellipse),
-            ],
+            ShapeFills {
+                triangle: self.tool_fill(Tool::Triangle),
+                rectangle: self.tool_fill(Tool::Rectangle),
+                ellipse: self.tool_fill(Tool::Ellipse),
+            },
             &self.palette,
         ))
     }
@@ -929,10 +886,13 @@ impl Editor {
             });
         }
         if self.tool == Tool::Text {
-            let properties = &mut self.tool_properties[TEXT_SLOT];
+            let default_text_size = self.default_text_size;
+            let properties = self
+                .properties_mut(Tool::Text)
+                .expect("text must have adjustable properties");
             properties.size = stepped_size(
                 properties.size,
-                self.default_text_size,
+                default_text_size,
                 steps,
                 1.0,
                 MIN_FONT_SIZE,
@@ -940,23 +900,21 @@ impl Editor {
             );
             (
                 Damage::Preview,
-                text_size_label(properties.size, self.default_text_size),
+                text_size_label(properties.size, default_text_size),
             )
         } else {
-            let Some((slot, _)) = self.tool.properties() else {
+            let tool = self.tool;
+            let Some(default) = self.default_size(tool) else {
                 return (Damage::None, String::new());
             };
-            let minimum = if self.tool == Tool::Eraser {
+            let minimum = if tool == Tool::Eraser {
                 MIN_ERASER_WIDTH
             } else {
                 MIN_STROKE_WIDTH
             };
-            let default = if self.tool == Tool::Eraser {
-                DEFAULT_ERASER_WIDTH
-            } else {
-                self.default_width
-            };
-            let properties = &mut self.tool_properties[slot];
+            let properties = self
+                .properties_mut(tool)
+                .expect("tools with a default size have adjustable properties");
             properties.size = stepped_size(
                 properties.size,
                 default,
@@ -966,7 +924,7 @@ impl Editor {
                 MAX_STROKE_WIDTH,
             );
             let width = properties.size;
-            self.style.width = width;
+            self.sync_active_style();
             let damage = self.update_live_stroke_style();
             (
                 damage.max(Damage::Preview),
@@ -991,16 +949,16 @@ impl Editor {
             if self.tool == Tool::Eraser {
                 return (Damage::None, String::new());
             }
-            let Some((slot, _)) = self.tool.properties() else {
+            let tool = self.tool;
+            let Some(properties) = self.properties_mut(tool) else {
                 return (Damage::None, String::new());
             };
-            let properties = &mut self.tool_properties[slot];
             let opacity = stepped_size(properties.opacity, 1.0, steps, 0.01, MIN_OPACITY, 1.0);
             if opacity == properties.opacity {
                 return (Damage::None, String::new());
             }
             properties.opacity = opacity;
-            self.style.color[3] = opacity;
+            self.sync_active_style();
             let damage = self.update_live_stroke_style();
             return (damage.max(Damage::Preview), percent_label(opacity, 1.0));
         }
@@ -1015,16 +973,19 @@ impl Editor {
             return (Damage::None, String::new());
         }
         if self.selected.is_empty() {
-            let Some((slot, Some(default))) = self.tool.properties() else {
+            let tool = self.tool;
+            let Some(default) = tool.default_roundness() else {
                 return (Damage::None, String::new());
             };
-            let properties = &mut self.tool_properties[slot];
+            let properties = self
+                .properties_mut(tool)
+                .expect("tools with roundness have adjustable properties");
             let roundness = stepped_size(properties.roundness, default, steps, 0.01, 0.0, 1.0);
             if roundness == properties.roundness {
                 return (Damage::None, String::new());
             }
             properties.roundness = roundness;
-            self.style.roundness = roundness;
+            self.sync_active_style();
             let damage = self.update_live_stroke_style();
             return (
                 damage.max(Damage::Preview),
@@ -1138,20 +1099,13 @@ impl Editor {
     fn tool_cursor(&self, tool: Tool) -> Cursor {
         Cursor::Tool(ToolCursor {
             tool,
-            width: if tool == Tool::Eraser {
-                self.eraser_width()
-            } else {
-                self.style.width
-            },
+            width: self.width_for(tool),
             color: self.style.color,
         })
     }
 
     fn eraser_width(&self) -> f32 {
-        let (slot, _) = Tool::Eraser
-            .properties()
-            .expect("eraser must have adjustable properties");
-        self.tool_properties[slot].size
+        self.width_for(Tool::Eraser)
     }
 
     pub fn hit_test(&self, point: Point) -> Option<ElementId> {
@@ -1378,6 +1332,46 @@ impl Editor {
         }
     }
 
+    fn properties(&self, tool: Tool) -> Option<&ToolProperties> {
+        self.tool_properties.properties(tool)
+    }
+
+    fn properties_mut(&mut self, tool: Tool) -> Option<&mut ToolProperties> {
+        self.tool_properties.properties_mut(tool)
+    }
+
+    fn default_size(&self, tool: Tool) -> Option<f32> {
+        match tool {
+            Tool::Text => Some(self.default_text_size),
+            Tool::Eraser => Some(DEFAULT_ERASER_WIDTH),
+            Tool::Select => None,
+            _ => Some(self.default_width),
+        }
+    }
+
+    fn style_for(&self, tool: Tool) -> Style {
+        let Some(properties) = self.properties(tool) else {
+            return self.style;
+        };
+        let mut style = self.style;
+        if tool != Tool::Text {
+            style.width = properties.size;
+        }
+        style.color[3] = properties.opacity;
+        style.roundness = properties.roundness;
+        style.filled = properties.filled;
+        style
+    }
+
+    fn width_for(&self, tool: Tool) -> f32 {
+        self.properties(tool)
+            .map_or(self.style.width, |properties| properties.size)
+    }
+
+    fn sync_active_style(&mut self) {
+        self.style = self.style_for(self.tool);
+    }
+
     fn switch_tool(&mut self, tool: Tool) -> Damage {
         if self.tool == tool {
             return Damage::None;
@@ -1388,15 +1382,7 @@ impl Editor {
         if tool != Tool::Eraser {
             self.last_non_eraser_tool = tool;
         }
-        if let Some((slot, _)) = tool.properties() {
-            let properties = self.tool_properties[slot];
-            if tool != Tool::Text {
-                self.style.width = properties.size;
-            }
-            self.style.color[3] = properties.opacity;
-            self.style.roundness = properties.roundness;
-            self.style.filled = properties.filled;
-        }
+        self.sync_active_style();
         damage
     }
 

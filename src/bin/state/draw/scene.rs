@@ -582,10 +582,10 @@ pub(super) fn default_roundness(kind: &ElementKind) -> Option<f32> {
         ElementKind::Path {
             end_marker: Some(EndMarker::Arrow),
             ..
-        } => Some(Tool::ARROW_ROUNDNESS),
-        ElementKind::Path { .. } => Some(Tool::LINE_ROUNDNESS),
-        ElementKind::Triangle { .. } => Some(Tool::TRIANGLE_ROUNDNESS),
-        ElementKind::Rectangle { .. } => Some(Tool::RECTANGLE_ROUNDNESS),
+        } => Tool::Arrow.default_roundness(),
+        ElementKind::Path { .. } => Tool::Line.default_roundness(),
+        ElementKind::Triangle { .. } => Tool::Triangle.default_roundness(),
+        ElementKind::Rectangle { .. } => Tool::Rectangle.default_roundness(),
         _ => None,
     }
 }
